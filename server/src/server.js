@@ -3,7 +3,8 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server as SocketServer } from 'socket.io'
-import connectDB from './src/config/database.js'
+import connectDB from './config/database.js'
+import authRoutes from './routes/authRoutes.js'
 
 dotenv.config()
 
@@ -32,10 +33,8 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'Server is running' })
 })
 
-// Basic routes (will be expanded in next phases)
-app.use('/api/auth', (req, res) => {
-    res.json({ message: 'Auth routes coming soon' })
-})
+// Auth routes
+app.use('/api/auth', authRoutes)
 
 // Socket.io connection
 io.on('connection', (socket) => {
@@ -49,9 +48,13 @@ io.on('connection', (socket) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack)
-    res.status(500).json({
+
+    const statusCode = err.statusCode || 500
+    const message = err.message || 'Something went wrong!'
+
+    res.status(statusCode).json({
         success: false,
-        message: 'Something went wrong!',
+        message: message,
         error: process.env.NODE_ENV === 'development' ? err.message : {},
     })
 })
