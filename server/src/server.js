@@ -5,6 +5,7 @@ import { createServer } from 'http'
 import { Server as SocketServer } from 'socket.io'
 import connectDB from './config/database.js'
 import authRoutes from './routes/authRoutes.js'
+import leetcodeRoutes from './routes/leetcodeRoutes.js'
 
 dotenv.config()
 
@@ -35,6 +36,9 @@ app.get('/api/health', (req, res) => {
 
 // Auth routes
 app.use('/api/auth', authRoutes)
+
+// LeetCode routes
+app.use('/api/leetcode', leetcodeRoutes)
 
 // Socket.io connection
 io.on('connection', (socket) => {

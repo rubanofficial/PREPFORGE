@@ -6,11 +6,20 @@ import { asyncHandler, AppError } from '../utils/errorHandler.js'
 // @route   POST /api/auth/register
 // @access  Public
 export const register = asyncHandler(async (req, res, next) => {
-    const { name, email, password, passwordConfirm } = req.body
+    const { name, email, username, password, passwordConfirm } = req.body
 
     // Validate input
-    if (!name || !email || !password || !passwordConfirm) {
+    if (!name || !email || !username || !password || !passwordConfirm) {
         return next(new AppError('Please provide all required fields', 400))
+    }
+
+    // Validate username format
+    if (username.length < 3 || username.length > 30) {
+        return next(new AppError('Username must be between 3 and 30 characters', 400))
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+        return next(new AppError('Username can only contain letters, numbers, underscore, and dash', 400))
     }
 
     // Check if passwords match
@@ -18,16 +27,23 @@ export const register = asyncHandler(async (req, res, next) => {
         return next(new AppError('Passwords do not match', 400))
     }
 
-    // Check if user already exists
-    let user = await User.findOne({ email })
+    // Check if user already exists by email
+    let user = await User.findOne({ email: email.toLowerCase() })
     if (user) {
         return next(new AppError('User already exists with that email', 409))
+    }
+
+    // Check if username is already taken
+    user = await User.findOne({ username: username.toLowerCase() })
+    if (user) {
+        return next(new AppError('Username is already taken', 409))
     }
 
     // Create new user
     user = await User.create({
         name,
-        email,
+        email: email.toLowerCase(),
+        username: username.toLowerCase(),
         password,
     })
 
@@ -42,6 +58,7 @@ export const register = asyncHandler(async (req, res, next) => {
             userId: user._id,
             name: user.name,
             email: user.email,
+            username: user.username,
             token,
         },
     })
@@ -51,25 +68,45 @@ export const register = asyncHandler(async (req, res, next) => {
 // @route   POST /api/auth/login
 // @access  Public
 export const login = asyncHandler(async (req, res, next) => {
-    const { email, password } = req.body
+    const { email, username, password } = req.body
 
-    // Validate input
-    if (!email || !password) {
-        return next(new AppError('Please provide email and password', 400))
+    // Validate that either email or username is provided
+    if ((!email && !username) || !password) {
+        return next(new AppError('Please provide email or username and password', 400))
+    }
+
+    // Build search query - can login with EITHER email OR username
+    let searchQuery = {}
+
+    if (email && username) {
+        // If both provided, search for either one
+        searchQuery = {
+            $or: [
+                { email: email.toLowerCase() },
+                { username: username.toLowerCase() }
+            ]
+        }
+    } else if (email) {
+        // Only email provided
+        searchQuery = { email: email.toLowerCase() }
+    } else if (username) {
+        // Only username provided
+        searchQuery = { username: username.toLowerCase() }
     }
 
     // Find user and include password field (normally excluded)
-    const user = await User.findOne({ email }).select('+password')
+    const user = await User.findOne(searchQuery).select('+password')
 
     // Check if user exists
     if (!user) {
-        return next(new AppError('Invalid email or password', 401))
+        const loginMethod = email ? `email "${email}"` : `username "${username}"`
+        return next(new AppError(`No account found with ${loginMethod}`, 401))
     }
 
     // Check if password matches
     const isPasswordCorrect = await user.matchPassword(password)
     if (!isPasswordCorrect) {
-        return next(new AppError('Invalid email or password', 401))
+        return next(new AppError('Password is incorrect', 401))
     }
 
     // Generate JWT token
@@ -83,6 +120,7 @@ export const login = asyncHandler(async (req, res, next) => {
             userId: user._id,
             name: user.name,
             email: user.email,
+            username: user.username,
             token,
         },
     })
@@ -119,5 +157,25 @@ export const logout = asyncHandler(async (req, res, next) => {
     res.status(200).json({
         success: true,
         message: 'Logout successful',
+    })
+})
+
+// @desc    DEBUG ONLY - List all users in database
+// @route   GET /api/auth/debug/users
+// @access  Public (remove this in production!)
+export const debugListUsers = asyncHandler(async (req, res, next) => {
+    const users = await User.find().select('-password')
+    
+    res.status(200).json({
+        success: true,
+        message: 'All users in database',
+        count: users.length,
+        data: users.map(user => ({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            username: user.username,
+            createdAt: user.createdAt
+        }))
     })
 })
