@@ -165,7 +165,7 @@ export const logout = asyncHandler(async (req, res, next) => {
 // @access  Public (remove this in production!)
 export const debugListUsers = asyncHandler(async (req, res, next) => {
     const users = await User.find().select('-password')
-    
+
     res.status(200).json({
         success: true,
         message: 'All users in database',
