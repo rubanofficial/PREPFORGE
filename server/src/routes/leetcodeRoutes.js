@@ -1,12 +1,17 @@
 import express from 'express';
-import { syncLeetCodeProblems, getUserProblems, getLeetCodeStats } from '../controllers/leetcodeController.js';
+import { syncLeetCodeProblems, syncAcceptedProblems, getUserProblems, getLeetCodeStats } from '../controllers/leetcodeController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// POST /api/leetcode/sync - Fetch and sync user's LeetCode problems
+// POST /api/leetcode/sync - Fetch user's solved counts and stats
 // Protected route: requires authentication
 router.post('/sync', protect, syncLeetCodeProblems);
+
+// POST /api/leetcode/sync-problems - Fetch and sync user's accepted solved problems
+// Protected route: requires authentication
+// Lightweight ingestion: title, titleSlug, timestamp only
+router.post('/sync-problems', protect, syncAcceptedProblems);
 
 // GET /api/leetcode/problems - Retrieve synced problems for user
 // Protected route: requires authentication

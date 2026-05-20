@@ -1,162 +1,267 @@
 import axios from 'axios';
 
-const LEETCODE_API = 'https://leetcode.com/graphql/';
+/**
+ * PROVIDER LAYER - Alfa LeetCode API Data Fetching
+ * 
+ * What is a Provider?
+ * A provider is a service that handles external API communication.
+ * It acts as a gateway between your application and third-party services.
+ * 
+ * Why Provider Abstraction?
+ * 1. ISOLATION: If API changes, only this file needs updates
+ * 2. TESTABILITY: Easy to mock for unit tests
+ * 3. CONSISTENCY: Single point of error handling and logging
+ * 4. FLEXIBILITY: Can swap to different provider/endpoint later without changing app
+ * 5. SEPARATION OF CONCERNS: API communication separate from business logic
+ * 
+ * WHY ALFA-LEETCODE-API?
+ * ✅ REST API (no GraphQL schema hell)
+ * ✅ Abstracts LeetCode GraphQL internally
+ * ✅ Simple endpoint for accepted problems
+ * ✅ No schema drift problems
+ * ✅ Lightweight responses
+ * ✅ Reliable and maintained
+ */
+
+const ALFA_LEETCODE_API = 'https://alfa-leetcode-api.onrender.com';
+
+// Configuration
+const API_TIMEOUT = 30000; // 30 seconds
+const MAX_RETRIES = 1;
 
 /**
- * Stable GraphQL query using ONLY official documented fields
- * Avoids unofficial/deprecated fields that cause 400 errors
- * Fetches: username, solved stats, ranking, reputation
+ * Axios instance for Alfa LeetCode API
  */
-const STABLE_USER_QUERY = `
-  query getUserStats($username: String!) {
-    matchedUser(username: $username) {
-      username
-      profile {
-        ranking
-        reputation
-        userAvatar
-      }
-      submitStats {
-        acSubmissionNum {
-          difficulty
-          count
-          submissions
-        }
-        totalSubmissionNum {
-          difficulty
-          count
-          submissions
-        }
-      }
+function createAxiosInstance() {
+  return axios.create({
+    baseURL: ALFA_LEETCODE_API,
+    timeout: API_TIMEOUT,
+    headers: {
+      'Content-Type': 'application/json'
     }
-  }
-`;
+  });
+}
 
 /**
- * LeetCode GraphQL Provider
- * Minimal, stable API integration
- * - Sends only stable GraphQL queries
- * - Returns raw LeetCode data
- * - Handles API errors safely
+ * Handles common API errors and logs them appropriately
+ * @param {Error} error - Error object from API call
+ * @param {string} operation - What operation failed (for logging)
+ * @returns {Object} Structured error response
  */
-class LeetcodeProvider {
-  constructor() {
-    this.apiUrl = LEETCODE_API;
+function handleApiError(error, operation) {
+  console.error(`❌ Alfa API Error [${operation}]:`, {
+    message: error.message,
+    code: error.code,
+    statusCode: error.response?.status,
+    timestamp: new Date().toISOString()
+  });
+
+  // Network/Timeout errors
+  if (error.code === 'ECONNABORTED') {
+    return {
+      error: 'TIMEOUT',
+      message: 'API request timeout (>30s)',
+      statusCode: 504
+    };
   }
 
-  /**
-   * Fetch user stats from LeetCode
-   * @param {string} username - LeetCode username
-   * @returns {Promise<Object>} Raw LeetCode user stats
-   * @throws {Error} With notFound, graphqlError, or timeout flags
-   */
-  async fetchUserStats(username) {
-    try {
-      const response = await axios.post(
-        this.apiUrl,
-        {
-          query: STABLE_USER_QUERY,
-          variables: { username }
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': 'https://leetcode.com/'
-          },
-          timeout: 10000
-        }
-      );
+  // Host not found
+  if (error.code === 'ENOTFOUND') {
+    return {
+      error: 'NETWORK_ERROR',
+      message: 'Cannot reach API - network unreachable',
+      statusCode: 503
+    };
+  }
 
-      // Handle GraphQL errors from response
-      if (response.data?.errors && response.data.errors.length > 0) {
-        const graphqlError = response.data.errors[0];
-        const errorMsg = graphqlError.message || 'Unknown GraphQL error';
-        
-        // Log error details for debugging
-        console.error('LeetCode GraphQL Error:', {
-          message: errorMsg,
-          locations: graphqlError.locations,
-          extensions: graphqlError.extensions
-        });
+  // User not found
+  if (error.response?.status === 404) {
+    return {
+      error: 'USER_NOT_FOUND',
+      message: 'LeetCode user not found',
+      statusCode: 404
+    };
+  }
 
-        const error = new Error(`LeetCode API error: ${errorMsg}`);
-        error.graphqlError = true;
-        error.statusCode = 502; // Bad Gateway - external API issue
-        throw error;
-      }
+  // Rate limited
+  if (error.response?.status === 429) {
+    return {
+      error: 'RATE_LIMITED',
+      message: 'API rate limit exceeded - try again later',
+      statusCode: 429
+    };
+  }
 
-      // Validate response structure
-      if (!response.data?.data) {
-        throw new Error('Invalid response from LeetCode API');
-      }
+  // Bad request
+  if (error.response?.status === 400) {
+    return {
+      error: 'BAD_REQUEST',
+      message: error.response.data?.message || 'Bad request to API',
+      statusCode: 400
+    };
+  }
 
-      // Check if user exists
-      const matchedUser = response.data.data.matchedUser;
-      if (!matchedUser) {
-        const error = new Error(`LeetCode user "${username}" not found`);
-        error.notFound = true;
-        error.statusCode = 404;
-        throw error;
-      }
+  // Generic HTTP error
+  if (error.response?.status) {
+    return {
+      error: 'HTTP_ERROR',
+      message: `API returned status ${error.response.status}`,
+      statusCode: error.response.status
+    };
+  }
 
-      // Return raw LeetCode data
-      return matchedUser;
+  // Unknown error
+  return {
+    error: 'API_ERROR',
+    message: error.message || 'Unknown API error',
+    statusCode: 502
+  };
+}
 
-    } catch (error) {
-      // Handle network errors
-      if (error.code === 'ECONNABORTED') {
-        const err = new Error('LeetCode API timeout - request took too long');
-        err.statusCode = 504;
-        throw err;
-      }
+/**
+ * Validates LeetCode username format
+ * @param {string} username - Username to validate
+ * @returns {boolean} True if valid, false otherwise
+ */
+function validateUsername(username) {
+  if (!username || typeof username !== 'string') {
+    return false;
+  }
 
-      if (error.code === 'ENOTFOUND') {
-        const err = new Error('Cannot reach LeetCode API - network error');
-        err.statusCode = 503;
-        throw err;
-      }
+  const trimmed = username.trim();
 
-      // Handle HTTP errors from axios
-      if (error.response) {
-        const status = error.response.status;
-        const responseData = error.response.data;
+  // LeetCode usernames: 1-50 chars, alphanumeric + dash/underscore
+  if (trimmed.length < 1 || trimmed.length > 50) {
+    return false;
+  }
 
-        // 400: Bad Request - usually schema validation error
-        if (status === 400) {
-          const graphqlErrors = responseData?.errors || [];
-          const errorMsg = graphqlErrors[0]?.message || 'GraphQL schema validation failed';
-          
-          console.error('GraphQL Schema Error:', errorMsg);
-          const err = new Error(`GraphQL error: ${errorMsg}`);
-          err.graphqlError = true;
-          err.statusCode = 502;
-          throw err;
-        }
+  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    return false;
+  }
 
-        // 429: Rate limited
-        if (status === 429) {
-          const err = new Error('LeetCode rate limit exceeded - try again later');
-          err.rateLimited = true;
-          err.statusCode = 429;
-          throw err;
-        }
+  return true;
+}
 
-        // Other HTTP errors
-        const err = new Error(`LeetCode API returned status ${status}`);
-        err.statusCode = status;
-        throw err;
-      }
+/**
+ * Fetch accepted (solved) problems for a user
+ * 
+ * Uses Alfa LeetCode API REST endpoint: /:username/acSubmission
+ * 
+ * Returns lightweight problem metadata:
+ * - title: Problem name
+ * - titleSlug: URL slug
+ * - timestamp: When solved (Unix timestamp)
+ * 
+ * WHY LIGHTWEIGHT?
+ * ✅ Avoids timeouts (small payload)
+ * ✅ Prevents performance issues
+ * ✅ Scalable for many users
+ * ✅ No timeout-inducing nested queries
+ * ✅ Only metadata we need (not code, editorials, etc)
+ * 
+ * @param {string} username - LeetCode username
+ * @returns {Object} Raw provider response with accepted problems
+ */
+async function fetchAcceptedProblems(username) {
+  console.log(`🔍 Provider: Fetching accepted problems for "${username}"`);
 
-      // Re-throw if already processed
-      if (error.statusCode) throw error;
+  // Validate input
+  if (!validateUsername(username)) {
+    console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
+    return {
+      error: 'INVALID_USERNAME',
+      message: 'Username must be 1-50 characters (alphanumeric, dash, underscore)',
+      statusCode: 400
+    };
+  }
 
-      // Unknown error
-      const err = new Error(`Failed to fetch LeetCode data: ${error.message}`);
-      err.statusCode = 500;
-      throw err;
+  try {
+    const client = createAxiosInstance();
+    const endpoint = `/${username.trim()}/acSubmission`;
+
+    console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+    const response = await client.get(endpoint);
+
+    console.log(`📥 Provider: Response status: ${response.status}`);
+
+    // Check if response has data
+    if (!response.data) {
+      console.warn(`⚠️  Provider: Empty response data for user "${username}"`);
+      return {
+        error: 'EMPTY_RESPONSE',
+        message: 'API returned empty response',
+        statusCode: 502
+      };
     }
+
+    // Alfa API returns { submissionList: [...] } or similar structure
+    const submissionList = response.data.submissionList || response.data.submissions || response.data;
+
+    if (!Array.isArray(submissionList)) {
+      console.warn(`⚠️  Provider: Unexpected response format for user "${username}"`);
+      return {
+        error: 'INVALID_FORMAT',
+        message: 'API returned unexpected response format',
+        statusCode: 502
+      };
+    }
+
+    if (submissionList.length === 0) {
+      console.warn(`⚠️  Provider: No accepted submissions found for user "${username}"`);
+      return {
+        error: 'NO_SUBMISSIONS',
+        message: `User "${username}" has no accepted submissions`,
+        statusCode: 404
+      };
+    }
+
+    console.log(`✅ Provider: Successfully fetched ${submissionList.length} accepted problems`);
+
+    return {
+      success: true,
+      data: {
+        username: username.trim(),
+        submissions: submissionList,
+        fetchedAt: new Date().toISOString()
+      }
+    };
+
+  } catch (error) {
+    const apiError = handleApiError(error, 'fetchAcceptedProblems');
+    console.error(`❌ Provider: Request failed for "${username}":`, apiError);
+    return apiError;
   }
 }
 
-export default new LeetcodeProvider();
+/**
+ * Export provider functions
+ * 
+ * PROVIDER RESPONSIBILITIES:
+ * ✅ Fetch data from Alfa LeetCode API
+ * ✅ Handle errors and timeouts
+ * ✅ Log API issues (detailed logs)
+ * ✅ Return raw provider data only
+ * ✅ Handle invalid usernames
+ * ✅ Validate API responses
+ * 
+ * NOT PROVIDER RESPONSIBILITIES:
+ * ❌ Normalize data
+ * ❌ Insert into MongoDB
+ * ❌ Calculate analytics
+ * ❌ Validate business logic
+ * ❌ Transform data structure
+ * ❌ Handle duplicates
+ * 
+ * Why keep provider lightweight?
+ * 1. ISOLATION: Easy to replace with GFG/Codeforces provider later
+ * 2. TESTABILITY: Can mock provider responses independently
+ * 3. REUSABILITY: Controller can call provider for multiple purposes
+ * 4. CLARITY: Provider = API calls, Normalization = data transformation
+ * 5. MAINTAINABILITY: If API changes, only update provider
+ */
+export const LeetcodeProvider = {
+  fetchAcceptedProblems,
+  validateUsername
+};
+
+export default LeetcodeProvider;

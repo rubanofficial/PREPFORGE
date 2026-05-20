@@ -21,7 +21,7 @@ export function normalizeLeetcodeStats(leetcodeStats, userId) {
 
   // Calculate total solved count
   const acSubmissionNum = submitStats.acSubmissionNum || [];
-  const totalSolved = acSubmissionNum.reduce((sum, item) => sum + (item.count || 0), 0);
+  const totalSolved = acSubmissionNum.find(a => a.difficulty === 'All')?.count || acSubmissionNum.reduce((sum, item) => item.difficulty !== 'All' ? sum + (item.count || 0) : sum, 0);
 
   console.log('📊 Normalization Debug:', {
     acSubmissionNum,
