@@ -23,29 +23,45 @@ const syncLeetCodeProblems = asyncHandler(async (req, res, next) => {
 
 /**
  * POST /api/leetcode/sync-problems
- * Fetch and sync user's ACCEPTED SOLVED PROBLEMS from LeetCode
+ * Fetch and sync user's COMPLETE ACCEPTED SOLVED PROBLEMS from LeetCode
  * 
- * FLOW:
- * 1. Provider: Fetch lightweight accepted submissions (title, titleSlug, timestamp)
- * 2. Normalization: Transform to internal format (only required fields)
- * 3. Deduplication: Check which problems already exist in DB
- * 4. Insertion: Insert only NEW problems (preserve history)
- * 5. Response: Return sync statistics
+ * WHY THIS NEW FLOW?
+ * 1. COMPLETE HISTORY: Fetches ALL solved problems, not just latest 20
+ * 2. DYNAMIC SCALING: Uses total solved count to determine fetch limit
+ * 3. SAFE LIMITS: Backend protection against massive requests
+ * 4. HISTORICAL DATA: Preserves complete solving timeline
+ * 
+ * NEW FLOW (5 STEPS):
+ * Step 1: Fetch solved stats (to get total count)
+ * Step 2: Dynamically set limit = total solved count
+ * Step 3: Fetch all accepted problems with dynamic limit
+ * Step 4: Normalize and deduplicate
+ * Step 5: Insert only new problems (preserve history)
  * 
  * ARCHITECTURE PATTERN:
- * Route → Controller → Provider → Normalization → MongoDB
+ * Route → Controller → Provider (Stats) → Provider (Problems) → Normalization → Dedup → MongoDB
  *
  * RESPONSIBILITIES BY LAYER:
- * - Controller: Validate input, orchestrate flow, return response
- * - Provider: Fetch from LeetCode API only
- * - Normalization: Transform structure only
- * - MongoDB: Store data only
+ * - Controller: Orchestrate flow, validate input, handle errors
+ * - Provider: Fetch data from API only (with safe limits)
+ * - Normalization: Transform structure (title, titleSlug, solvedAt)
+ * - MongoDB: Store data with compound unique index (userId + titleSlug)
  * 
- * WHY THIS ARCHITECTURE:
- * - SCALABLE: Easy to add GFG, Codeforces providers
- * - TESTABLE: Each layer independently testable
- * - MAINTAINABLE: Changes isolated to specific layer
- * - FLEXIBLE: Can swap providers without touching controller
+ * WHY THIS ARCHITECTURE SCALES:
+ * 1. MODULAR: Each layer can be tested independently
+ * 2. PROVIDER AGNOSTIC: Can add GFG, Codeforces providers later
+ * 3. SAFE: Built-in upper limit protection (3000 max per sync)
+ * 4. EFFICIENT: Uses deduplication before insert
+ * 5. MAINTAINABLE: Clear separation of concerns
+ * 
+ * LOGGING DETAILS:
+ * - Total solved count from stats
+ * - Limit used for API request
+ * - Provider response size
+ * - Normalization count (valid/invalid/duplicates)
+ * - Database deduplication count
+ * - Inserted count
+ * - Skipped count
  */
 const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
     const { leetcodeUsername } = req.body;
@@ -57,42 +73,170 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
     }
 
     const username = leetcodeUsername.trim();
-    if (username.length < 2 || username.length > 30) {
-        return next(new AppError('Username must be 2-30 characters', 400));
+    if (username.length < 2 || username.length > 50) {
+        return next(new AppError('Username must be 2-50 characters', 400));
     }
 
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`🚀 SYNC FLOW: Starting sync for user ${userId}`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🚀 FULL SYNC FLOW: Starting complete problem sync for user ${userId}`);
+    console.log(`   Username: ${username}`);
+    console.log(`${'='.repeat(70)}\n`);
 
     try {
-        // ===== STEP 1: PROVIDER - Fetch accepted problems =====
-        console.log(`[1/4] 📡 Provider: Fetching accepted problems...`);
-        const providerResponse = await leetcodeProvider.fetchAcceptedProblems(username);
+        // ===== STEP 1: FETCH SOLVED STATS =====
+        console.log(`[STEP 1/5] 📊 Provider: Fetching solved statistics...`);
+        const statsResponse = await leetcodeProvider.fetchSolvedStats(username);
 
         // Check for provider errors
-        if (providerResponse.error) {
-            console.error(`❌ Provider error: ${providerResponse.message}`);
-            return next(new AppError(providerResponse.message, providerResponse.statusCode));
+        if (statsResponse.error) {
+            console.error(`❌ Stats fetch error: ${statsResponse.message}`);
+            return next(new AppError(statsResponse.message, statsResponse.statusCode));
         }
 
-        console.log(`✅ Provider: Successfully fetched data`);
+        const totalSolved = statsResponse.data.totalSolved;
+        console.log(`✅ Stats fetched:`, {
+            totalSolved: statsResponse.data.totalSolved,
+            easySolved: statsResponse.data.easySolved,
+            mediumSolved: statsResponse.data.mediumSolved,
+            hardSolved: statsResponse.data.hardSolved
+        });
 
-        // ===== STEP 2: NORMALIZATION - Transform to internal format =====
-        console.log(`\n[2/4] 📝 Normalization: Transforming LeetCode response...`);
-        const normalizedData = normalizeAcceptedProblems(providerResponse, userId);
-        const { problems, stats: normStats } = normalizedData;
-
-        console.log(`✅ Normalization: Complete`);
-        console.log(`   - Valid problems: ${normStats.valid}`);
-        console.log(`   - Invalid/skipped: ${normStats.invalid}`);
-        console.log(`   - Internal duplicates: ${normStats.duplicates}`);
-
-        if (problems.length === 0) {
-            console.log(`⚠️  No valid problems to sync`);
+        // Early exit if user has no problems
+        if (totalSolved === 0) {
+            console.log(`⚠️  User "${username}" has no solved problems`);
             return res.status(200).json({
                 success: true,
-                message: 'No new problems to sync',
+                message: `User "${username}" has no solved problems`,
+                data: {
+                    username: username,
+                    syncedCount: 0,
+                    skippedCount: 0,
+                    totalCount: 0,
+                    stats: {
+                        totalSolved: 0,
+                        easySolved: 0,
+                        mediumSolved: 0,
+                        hardSolved: 0,
+                        inserted: 0
+                    }
+                }
+            });
+        }
+
+        // ===== STEP 2: DYNAMICALLY DETERMINE FETCH LIMIT =====
+        console.log(`\n[STEP 2/5] 🎯 Controller: Setting dynamic limit...`);
+        const dynamicLimit = totalSolved;
+        console.log(`✅ Dynamic limit set:`, {
+            totalSolvedCount: totalSolved,
+            limitToFetch: dynamicLimit,
+            reason: 'Using total solved count as limit'
+        });
+
+        // ===== STEP 3: FETCH ALL ACCEPTED PROBLEMS WITH DYNAMIC LIMIT =====
+        console.log(`\n[STEP 3/5] 📡 Provider: Fetching all accepted problems...`);
+
+        // Try to fetch all problems - the API may paginate, so we fetch in chunks
+        let allSubmissions = [];
+        let offset = 0;
+        const chunkSize = dynamicLimit; // Fetch size per request
+        let hasMore = true;
+        let fetchAttempts = 0;
+        const maxFetchAttempts = 15; // Prevent infinite loops (max ~15 * 3000 = 45k problems)
+
+        while (hasMore && fetchAttempts < maxFetchAttempts) {
+            fetchAttempts++;
+            console.log(`   📥 Fetch attempt ${fetchAttempts}: offset=${offset}, limit=${chunkSize}`);
+
+            // Try fetching with the dynamic limit and offset (for pagination)
+            const providerResponse = await leetcodeProvider.fetchAcceptedProblems(username, chunkSize, offset);
+
+            // Check for provider errors
+            if (providerResponse.error) {
+                console.error(`❌ Provider error on attempt ${fetchAttempts}: ${providerResponse.message}`);
+
+                // If it's a timeout or network error, don't retry indefinitely
+                if (providerResponse.error === 'TIMEOUT' || providerResponse.error === 'NETWORK_ERROR') {
+                    console.error(`❌ Network error - stopping pagination`);
+                    if (allSubmissions.length === 0) {
+                        return next(new AppError(providerResponse.message, providerResponse.statusCode));
+                    }
+                    break; // Use what we've fetched so far
+                }
+
+                // For other errors, stop
+                return next(new AppError(providerResponse.message, providerResponse.statusCode));
+            }
+
+            const batch = providerResponse.data.submissions || [];
+            const batchCount = batch.length;
+
+            console.log(`   ✅ Received ${batchCount} problems in this batch`);
+
+            allSubmissions = allSubmissions.concat(batch);
+
+            // Check if we got fewer items than requested (pagination detection)
+            if (batchCount < chunkSize) {
+                console.log(`   ✨ Reached end of results (received ${batchCount} < requested ${chunkSize})`);
+                hasMore = false;
+            }
+
+            offset += batchCount;
+        }
+
+        if (allSubmissions.length === 0) {
+            console.log(`⚠️  No problems fetched from provider`);
+            return res.status(200).json({
+                success: true,
+                message: 'No valid problems to sync',
+                data: {
+                    username: username,
+                    syncedCount: 0,
+                    skippedCount: 0,
+                    totalCount: 0,
+                    stats: {
+                        totalSolvedOnLeetCode: statsResponse.data.totalSolved,
+                        easyOnLeetCode: statsResponse.data.easySolved,
+                        mediumOnLeetCode: statsResponse.data.mediumSolved,
+                        hardOnLeetCode: statsResponse.data.hardSolved,
+                        fetchedFromProvider: 0,
+                        limitUsed: dynamicLimit,
+                        reason: 'No submissions returned from provider'
+                    }
+                }
+            });
+        }
+
+        console.log(`✅ Provider: Successfully fetched total ${allSubmissions.length} accepted problems`);
+
+        // Prepare provider response object for normalization
+        const completeProviderResponse = {
+            success: true,
+            data: {
+                username: username.trim(),
+                submissions: allSubmissions,
+                count: allSubmissions.length,
+                limitUsed: dynamicLimit,
+                fetchedAt: new Date().toISOString()
+            }
+        };
+
+        // ===== STEP 4: NORMALIZATION - Transform to internal format =====
+        console.log(`\n[STEP 4/5] 📝 Normalization: Transforming ${allSubmissions.length} problems...`);
+        const normalizedData = normalizeAcceptedProblems(completeProviderResponse, userId);
+        const { problems, stats: normStats } = normalizedData;
+
+        console.log(`✅ Normalization complete:`, {
+            validProblems: normStats.valid,
+            invalidSkipped: normStats.invalid,
+            internalDuplicates: normStats.duplicates,
+            totalProcessed: normStats.total
+        });
+
+        if (problems.length === 0) {
+            console.log(`⚠️  No valid problems after normalization`);
+            return res.status(200).json({
+                success: true,
+                message: 'No valid problems to sync',
                 data: {
                     username: username,
                     syncedCount: 0,
@@ -103,53 +247,46 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
             });
         }
 
-        // ===== STEP 3: DEDUPLICATION - Check what's new =====
-        console.log(`\n[3/4] 🔍 Database: Checking for duplicates...`);
+        // ===== STEP 5: DEDUPLICATION & INSERTION =====
+        console.log(`\n[STEP 5/5] 💾 Database: Checking duplicates and inserting...`);
 
-        // Build dedup keys (userId + titleSlug)
-        const problemKeys = problems.map(p => ({
-            userId,
-            titleSlug: p.titleSlug
-        }));
-
-        // Find existing problems
+        // Find existing problems using compound index (userId + titleSlug)
         const existingProblems = await Problem.find({
             userId,
             titleSlug: { $in: problems.map(p => p.titleSlug) }
         }).select('titleSlug');
 
-        const existingTitlSlugs = new Set(existingProblems.map(p => p.titleSlug));
+        const existingTitleSlugs = new Set(existingProblems.map(p => p.titleSlug));
 
         // Separate new and existing
-        const newProblems = problems.filter(p => !existingTitlSlugs.has(p.titleSlug));
-        const skippedProblems = problems.filter(p => existingTitlSlugs.has(p.titleSlug));
+        const newProblems = problems.filter(p => !existingTitleSlugs.has(p.titleSlug));
+        const skippedProblems = problems.filter(p => existingTitleSlugs.has(p.titleSlug));
 
-        console.log(`✅ Database check complete`);
-        console.log(`   - New problems: ${newProblems.length}`);
-        console.log(`   - Already in DB: ${skippedProblems.length}`);
+        console.log(`✅ Deduplication check:`, {
+            newProblems: newProblems.length,
+            existingInDB: skippedProblems.length,
+            totalFromNormalization: problems.length
+        });
 
-        // ===== STEP 4: INSERTION - Insert only new problems =====
-        console.log(`\n[4/4] 💾 MongoDB: Inserting new problems...`);
-
+        // Insert only new problems
         let insertedCount = 0;
         if (newProblems.length > 0) {
-            // Build MongoDB documents for new problems
+            // Build MongoDB documents
             const documents = newProblems.map(problem =>
                 buildProblemDocument(problem, userId)
             );
 
-            // Insert using insertMany with ordered: false (skip duplicates on race conditions)
+            // Insert using insertMany with ordered: false (race condition safe)
             try {
                 const result = await Problem.insertMany(documents, { ordered: false });
                 insertedCount = result.length;
                 console.log(`✅ MongoDB: Inserted ${insertedCount} new problems`);
             } catch (insertError) {
-                // Handle potential race condition where another request inserted same problems
+                // Handle race condition (another request inserted same problems)
                 if (insertError.code === 11000) {
-                    console.warn(`⚠️  MongoDB: Duplicate key error (race condition)`);
-                    // Try inserting remaining with retries
+                    console.warn(`⚠️  MongoDB: Duplicate key error (race condition - safe)`);
                     insertedCount = insertError.insertedIds?.length || 0;
-                    console.log(`✅ MongoDB: Inserted ${insertedCount} problems (some duplicates skipped)`);
+                    console.log(`✅ MongoDB: Inserted ${insertedCount} problems (duplicates skipped)`);
                 } else {
                     throw insertError;
                 }
@@ -157,24 +294,35 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
         }
 
         // ===== SUCCESS RESPONSE =====
-        console.log(`\n${'='.repeat(60)}`);
-        console.log(`✅ SYNC COMPLETE: Successfully synced problems`);
-        console.log(`${'='.repeat(60)}\n`);
+        console.log(`\n${'='.repeat(70)}`);
+        console.log(`✅ FULL SYNC COMPLETE`);
+        console.log(`${'='.repeat(70)}\n`);
 
         res.status(200).json({
             success: true,
-            message: `Sync completed for user "${username}"`,
+            message: `Full sync completed for user "${username}"`,
             data: {
                 username: username,
                 syncedCount: insertedCount,
                 skippedCount: skippedProblems.length,
                 totalCount: problems.length,
                 stats: {
-                    fromProvider: normStats.total,
-                    valid: normStats.valid,
-                    invalid: normStats.invalid,
-                    duplicates: normStats.duplicates,
-                    inserted: insertedCount
+                    // Stats from LeetCode
+                    totalSolvedOnLeetCode: statsResponse.data.totalSolved,
+                    easyOnLeetCode: statsResponse.data.easySolved,
+                    mediumOnLeetCode: statsResponse.data.mediumSolved,
+                    hardOnLeetCode: statsResponse.data.hardSolved,
+                    // Provider response
+                    fetchedFromProvider: allSubmissions.length,
+                    limitUsed: dynamicLimit,
+                    fetchAttempts: fetchAttempts,
+                    // Normalization
+                    validFromProvider: normStats.valid,
+                    invalidSkipped: normStats.invalid,
+                    internalDuplicates: normStats.duplicates,
+                    // Database
+                    alreadyInDatabase: skippedProblems.length,
+                    newProblemsInserted: insertedCount
                 }
             }
         });
@@ -183,11 +331,11 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
         console.error(`❌ SYNC ERROR:`, error.message);
         console.error(`   Stack:`, error.stack);
 
-        // Handle normalization errors (from provider response format issues)
+        // Handle normalization errors
         if (error.message && error.message.includes('Normalization')) {
             console.error(`❌ Normalization Error: Provider response format mismatch`);
             return next(new AppError(
-                `Normalization failed: ${error.message}. Provider returned unexpected response structure.`,
+                `Normalization failed: ${error.message}`,
                 502
             ));
         }
@@ -196,9 +344,6 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
         if (error.notFound) {
             return next(new AppError(error.message, 404));
         }
-        if (error.graphqlError) {
-            return next(new AppError(error.message, 502));
-        }
         if (error.rateLimited) {
             return next(new AppError(error.message, 429));
         }
@@ -206,7 +351,7 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
             return next(new AppError(error.message, error.statusCode));
         }
 
-        // Generic error - log full details for debugging
+        // Generic error
         console.error(`❌ Unexpected error:`, {
             name: error.name,
             message: error.message,
@@ -223,7 +368,7 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
  * Query: ?difficulty=Medium&topic=Array&limit=20&offset=0
  */
 const getUserProblems = asyncHandler(async (req, res, next) => {
-    const userId = req.user._id;
+    const userId = req.user.userId;
     const { difficulty, topic, limit = 20, offset = 0 } = req.query;
 
     // Build query filter
@@ -275,7 +420,7 @@ const getUserProblems = asyncHandler(async (req, res, next) => {
  * Get problem-solving statistics for user
  */
 const getLeetCodeStats = asyncHandler(async (req, res) => {
-    const userId = req.user._id;
+    const userId = req.user.userId;
 
     // Get difficulty breakdown
     const difficultyStats = await Problem.aggregate([

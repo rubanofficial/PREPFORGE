@@ -30,6 +30,27 @@ const API_TIMEOUT = 30000; // 30 seconds
 const MAX_RETRIES = 1;
 
 /**
+ * SAFE UPPER LIMIT PROTECTION
+ * 
+ * Why this matters:
+ * 1. BACKEND PROTECTION: Prevents massive API calls from overloading our server
+ * 2. PROVIDER PROTECTION: Respects rate limits and provider capacity
+ * 3. DATABASE PROTECTION: Prevents sudden huge insertions
+ * 4. NETWORK PROTECTION: Limits payload size to prevent timeouts
+ * 5. RESOURCE PROTECTION: Manages memory during processing
+ * 
+ * Real-world example:
+ * - A user with 5000+ solved problems would create enormous payloads
+ * - Setting upper limit to 3000 ensures:
+ *   - API response stays <50MB
+ *   - Normalization completes quickly
+ *   - Deduplication is fast
+ *   - MongoDB batch insert is safe
+ *   - No OOM errors on server
+ */
+const SAFE_UPPER_LIMIT = 3000; // Max problems to fetch in one sync
+
+/**
  * Axios instance for Alfa LeetCode API
  */
 function createAxiosInstance() {
@@ -143,27 +164,28 @@ function validateUsername(username) {
 }
 
 /**
- * Fetch accepted (solved) problems for a user
+ * Fetch solved problem statistics for a user
  * 
- * Uses Alfa LeetCode API REST endpoint: /:username/acSubmission
+ * Uses Alfa LeetCode API REST endpoint: /:username/solved
  * 
- * Returns lightweight problem metadata:
- * - title: Problem name
- * - titleSlug: URL slug
- * - timestamp: When solved (Unix timestamp)
+ * Returns:
+ * - totalSolved: Total number of problems solved
+ * - easySolved: Number of easy problems solved
+ * - mediumSolved: Number of medium problems solved
+ * - hardSolved: Number of hard problems solved
  * 
- * WHY LIGHTWEIGHT?
- * ✅ Avoids timeouts (small payload)
- * ✅ Prevents performance issues
- * ✅ Scalable for many users
- * ✅ No timeout-inducing nested queries
- * ✅ Only metadata we need (not code, editorials, etc)
+ * WHY FETCH STATS FIRST?
+ * 1. DYNAMIC LIMIT: Use total count as limit for acSubmission
+ * 2. OPTIMIZATION: Skip fetching if user has 0 problems
+ * 3. PROGRESS TRACKING: Know how many total we're syncing
+ * 4. DEDUPLICATION: Compare new sync count vs database
+ * 5. USER AWARENESS: Can notify user of progress
  * 
  * @param {string} username - LeetCode username
- * @returns {Object} Raw provider response with accepted problems
+ * @returns {Object} Raw provider response with solved stats
  */
-async function fetchAcceptedProblems(username) {
-  console.log(`🔍 Provider: Fetching accepted problems for "${username}"`);
+async function fetchSolvedStats(username) {
+  console.log(`📊 Provider: Fetching solved stats for "${username}"`);
 
   // Validate input
   if (!validateUsername(username)) {
@@ -177,17 +199,178 @@ async function fetchAcceptedProblems(username) {
 
   try {
     const client = createAxiosInstance();
-    const endpoint = `/${username.trim()}/acSubmission`;
+    const endpoint = `/${username.trim()}/solved`;
 
     console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
     const response = await client.get(endpoint);
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
+    // Debug log
+    console.log(`🔎 DEBUG [fetchSolvedStats]: Response structure:`, {
+      type: typeof response.data,
+      keys: Object.keys(response.data || {})
+    });
+
+    if (!response.data) {
+      console.warn(`⚠️  Provider: Empty response data for stats "${username}"`);
+      return {
+        error: 'EMPTY_RESPONSE',
+        message: 'API returned empty response',
+        statusCode: 502
+      };
+    }
+
+    // Extract stats - Handle different field name variations
+    // The API response might have: solvedProblem, totalSolved, total
+    let totalSolved = response.data.solvedProblem || response.data.totalSolved || response.data.total || 0;
+    
+    const easySolved = response.data.easySolved || 0;
+    const mediumSolved = response.data.mediumSolved || 0;
+    const hardSolved = response.data.hardSolved || 0;
+    
+    // If totalSolved is not provided, calculate from difficulty breakdown
+    if (totalSolved === 0 && (easySolved > 0 || mediumSolved > 0 || hardSolved > 0)) {
+      totalSolved = easySolved + mediumSolved + hardSolved;
+      console.log(`✅ Provider: Calculated totalSolved from difficulty breakdown: ${totalSolved}`);
+    }
+
+    if (totalSolved === 0) {
+      console.warn(`⚠️  Provider: User "${username}" has no solved problems`);
+      return {
+        success: true,
+        data: {
+          username: username.trim(),
+          totalSolved: 0,
+          easySolved: easySolved,
+          mediumSolved: mediumSolved,
+          hardSolved: hardSolved,
+          fetchedAt: new Date().toISOString()
+        }
+      };
+    }
+
+    console.log(`✅ Provider: Successfully fetched stats - Total solved: ${totalSolved}`);
+
+    return {
+      success: true,
+      data: {
+        username: username.trim(),
+        totalSolved,
+        easySolved: easySolved,
+        mediumSolved: mediumSolved,
+        hardSolved: hardSolved,
+        fetchedAt: new Date().toISOString()
+      }
+    };
+
+  } catch (error) {
+    const apiError = handleApiError(error, 'fetchSolvedStats');
+    console.error(`❌ Provider: Fetch stats failed for "${username}":`, apiError);
+    return apiError;
+  }
+}
+
+/**
+ * Fetch accepted (solved) problems for a user with dynamic limit and offset
+ * 
+ * Uses Alfa LeetCode API REST endpoint: /:username/submission?limit=N&skip=offset
+ * Note: Some versions use /acSubmission, we try /submission first
+ * 
+ * WHY DYNAMIC LIMIT WITH PAGINATION?
+ * 1. SCALABILITY: Fetch only what the user has solved
+ * 2. COMPLETENESS: Don't hardcode "fetch 20" - fetch ALL via pagination
+ * 3. EFFICIENCY: Use stats to know exact limit needed
+ * 4. SAFETY: Upper limit protection prevents overload
+ * 
+ * Parameters:
+ * @param {string} username - LeetCode username
+ * @param {number} limit - Problems to fetch per request
+ * @param {number} offset - Skip this many problems (for pagination)
+ * @returns {Object} Raw provider response with accepted problems
+ */
+async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
+  console.log(`🔍 Provider: Fetching accepted problems for "${username}" with limit=${limit}, offset=${offset}`);
+
+  // Validate input
+  if (!validateUsername(username)) {
+    console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
+    return {
+      error: 'INVALID_USERNAME',
+      message: 'Username must be 1-50 characters (alphanumeric, dash, underscore)',
+      statusCode: 400
+    };
+  }
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    console.warn(`⚠️  Provider: Invalid limit: ${limit}`);
+    return {
+      error: 'INVALID_LIMIT',
+      message: 'Limit must be a positive integer',
+      statusCode: 400
+    };
+  }
+
+  if (!Number.isInteger(offset) || offset < 0) {
+    console.warn(`⚠️  Provider: Invalid offset: ${offset}`);
+    return {
+      error: 'INVALID_OFFSET',
+      message: 'Offset must be a non-negative integer',
+      statusCode: 400
+    };
+  }
+
+  // Apply safe upper limit protection
+  const effectiveLimit = Math.min(limit, SAFE_UPPER_LIMIT);
+  
+  if (limit > SAFE_UPPER_LIMIT) {
+    console.warn(`⚠️  Provider: Limit ${limit} exceeds safe upper limit ${SAFE_UPPER_LIMIT}, capping to ${effectiveLimit}`);
+  }
+
+  try {
+    const client = createAxiosInstance();
+    
+    // Try /submission endpoint first (more common variant)
+    // Try multiple parameter variations for pagination
+    let endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}&skip=${offset}`;
+    console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+    
+    let response;
+    try {
+      response = await client.get(endpoint);
+    } catch (firstError) {
+      // Try without skip parameter
+      if (firstError.response?.status === 404 || firstError.code === 'ERR_BAD_REQUEST') {
+        endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}`;
+        console.log(`⚠️  Provider: Retrying without skip parameter`);
+        console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+        try {
+          response = await client.get(endpoint);
+        } catch (secondError) {
+          // Try /acSubmission endpoint
+          endpoint = `/${username.trim()}/acSubmission?limit=${effectiveLimit}&skip=${offset}`;
+          console.log(`⚠️  Provider: Trying /acSubmission endpoint`);
+          console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+          try {
+            response = await client.get(endpoint);
+          } catch (thirdError) {
+            throw thirdError;
+          }
+        }
+      } else {
+        throw firstError;
+      }
+    }
+
+    console.log(`📥 Provider: Response status: ${response.status}`);
+
     // **CRITICAL DEBUG LOGGING** - Inspect REAL response structure
-    console.log(`🔎 DEBUG: Full response.data type:`, typeof response.data);
-    console.log(`🔎 DEBUG: Full response.data:`, JSON.stringify(response.data, null, 2));
-    console.log(`🔎 DEBUG: response.data keys:`, Object.keys(response.data || {}));
+    console.log(`🔎 DEBUG [fetchAcceptedProblems]: Response structure:`, {
+      type: typeof response.data,
+      isArray: Array.isArray(response.data),
+      keys: Object.keys(response.data || {}),
+      dataLength: Array.isArray(response.data) ? response.data.length : (response.data?.submissions?.length || 'unknown')
+    });
 
     // Check if response has data
     if (!response.data) {
@@ -260,15 +443,29 @@ async function fetchAcceptedProblems(username) {
     }
 
     // Log sample of first item to understand structure
-    console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
+    if (offset === 0) {
+      console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
+    }
+    
+    console.log(`📋 Provider: Fetched ${submissionList.length} problems (limit=${effectiveLimit}, offset=${offset})`);
+    
+    // **CRITICAL WARNING**: If fetched < limit, API might have max page size or end reached
+    if (submissionList.length < effectiveLimit) {
+      console.warn(`⚠️  Provider: Received fewer items than requested (${submissionList.length} < ${effectiveLimit})`);
+      console.warn(`   This means: API hit end of results OR has max page size`);
+    }
 
-    console.log(`✅ Provider: Successfully fetched ${submissionList.length} accepted problems`);
+    console.log(`✅ Provider: Successfully fetched ${submissionList.length} problems`);
 
     return {
       success: true,
       data: {
         username: username.trim(),
         submissions: submissionList,
+        count: submissionList.length,
+        limitRequested: limit,
+        limitUsed: effectiveLimit,
+        offsetUsed: offset,
         fetchedAt: new Date().toISOString()
       }
     };
@@ -290,6 +487,7 @@ async function fetchAcceptedProblems(username) {
  * ✅ Return raw provider data only
  * ✅ Handle invalid usernames
  * ✅ Validate API responses
+ * ✅ Apply safe limits
  * 
  * NOT PROVIDER RESPONSIBILITIES:
  * ❌ Normalize data
@@ -307,6 +505,7 @@ async function fetchAcceptedProblems(username) {
  * 5. MAINTAINABILITY: If API changes, only update provider
  */
 export const LeetcodeProvider = {
+  fetchSolvedStats,
   fetchAcceptedProblems,
   validateUsername
 };
