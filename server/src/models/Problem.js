@@ -1,74 +1,50 @@
 import mongoose from 'mongoose';
 
 const problemSchema = new mongoose.Schema({
-    // Core problem information
+    // Problem identification
     title: {
         type: String,
-        required: true,
-        index: true
+        required: true
     },
     titleSlug: {
         type: String,
         required: true,
-        unique: true,
         lowercase: true
     },
-    questionId: {
-        type: String,
-        sparse: true
-    },
 
-    // Platform identifier
+    // Platform
     platform: {
         type: String,
-        default: 'leetcode',
-        enum: ['leetcode', 'codeforces', 'hackerrank']
+        enum: ['leetcode', 'codeforces', 'hackerrank'],
+        default: 'leetcode'
     },
 
-    // Difficulty classification
+    // Difficulty (optional - can be null initially, enriched later)
     difficulty: {
         type: String,
-        enum: ['Easy', 'Medium', 'Hard'],
-        required: true,
-        index: true
+        enum: ['Easy', 'Medium', 'Hard', null],
+        default: null
     },
 
-    // When the user solved it
+    // When user solved it
     solvedAt: {
         type: Date,
         required: true,
         index: true
     },
 
-    // Owner of the submission
+    // User ownership (reference)
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
-        index: true
+        required: true
     },
 
-    // Topic/Category classification
+    // Topics (optional - can be enriched later)
     topics: [{
         type: String,
         lowercase: true
     }],
-
-    // Data structure/Algorithm pattern (for future recommendation engine)
-    pattern: [{
-        type: String,
-        lowercase: true
-    }],
-
-    // Metadata
-    submissionId: {
-        type: String,
-        sparse: true
-    },
-    language: {
-        type: String,
-        default: null
-    },
 
     // Timestamps
     createdAt: {
@@ -81,9 +57,13 @@ const problemSchema = new mongoose.Schema({
     }
 });
 
-// Index for common queries
+// Deduplication index: prevent same problem per user
+// Unique combination of (userId, titleSlug)
+problemSchema.index({ userId: 1, titleSlug: 1 }, { unique: true });
+
+// Query optimization indexes
 problemSchema.index({ userId: 1, solvedAt: -1 });
 problemSchema.index({ userId: 1, difficulty: 1 });
-problemSchema.index({ userId: 1, topics: 1 });
+problemSchema.index({ userId: 1, 'topics': 1 });
 
 export default mongoose.model('Problem', problemSchema);

@@ -1,110 +1,111 @@
-import leetcodeService from '../services/leetcodeService.js';
+import leetcodeProvider from '../services/providers/leetcodeProvider.js';
+import { normalizeLeetcodeStats } from '../services/normalization/normalizeLeetcodeData.js';
 import Problem from '../models/Problem.js';
-import { asyncHandler } from '../utils/errorHandler.js';
+import { asyncHandler, AppError } from '../utils/errorHandler.js';
 
 /**
  * POST /api/leetcode/sync
- * Fetch user's LeetCode data and store in MongoDB
+ * Fetch user's LeetCode stats (stable GraphQL integration)
+ * Returns: username, solved count, ranking, reputation, difficulty breakdown
  */
-const syncLeetCodeProblems = asyncHandler(async (req, res) => {
+const syncLeetCodeProblems = asyncHandler(async (req, res, next) => {
     const { leetcodeUsername } = req.body;
     const userId = req.user._id;
 
-    // Validation
+    // Validate input
     if (!leetcodeUsername || typeof leetcodeUsername !== 'string') {
-        return res.status(400).json({
-            success: false,
-            message: 'LeetCode username is required and must be a string'
-        });
+        return next(new AppError('LeetCode username is required', 400));
     }
 
-    if (leetcodeUsername.trim().length < 2) {
-        return res.status(400).json({
-            success: false,
-            message: 'LeetCode username must be at least 2 characters'
-        });
+    const username = leetcodeUsername.trim();
+    if (username.length < 2 || username.length > 30) {
+        return next(new AppError('Username must be 2-30 characters', 400));
     }
 
-    // Fetch data from LeetCode GraphQL
-    const leetcodeData = await leetcodeService.fetchLeetCodeData(
-        leetcodeUsername.trim()
-    );
+    try {
+        // Step 1: Fetch user stats from LeetCode (stable GraphQL query)
+        const rawStats = await leetcodeProvider.fetchUserStats(username);
 
-    // Delete old problems for this user (so we don't have duplicates)
-    await Problem.deleteMany({ userId });
+        // DEBUG: Log raw API response to check data structure
+        console.log('🔍 Raw LeetCode API Response:', {
+            username: rawStats.username,
+            acSubmissionNum: rawStats.submitStats?.acSubmissionNum,
+            totalSubmissionNum: rawStats.submitStats?.totalSubmissionNum
+        });
 
-    // Transform and save each submission to MongoDB
-    const problemsToSave = leetcodeData.submissions.map(submission => ({
-        title: submission.problemDetails.title,
-        titleSlug: submission.problemDetails.titleSlug,
-        questionId: submission.problemDetails.questionId,
-        platform: 'leetcode',
-        difficulty: submission.problemDetails.difficulty,
-        solvedAt: new Date(submission.timestamp * 1000), // Convert Unix timestamp to Date
-        userId,
-        topics: submission.problemDetails.topics || [],
-        pattern: [], // Empty for now; recommendation engine will populate this later
-        submissionId: submission.id,
-        language: null // LeetCode submission object doesn't always include language
-    }));
+        // Step 2: Normalize to internal format
+        const normalizedStats = normalizeLeetcodeStats(rawStats, userId);
 
-    // Batch insert all problems
-    const savedProblems = await Problem.insertMany(problemsToSave);
+        // Step 3: Return user stats
+        // Note: Problem history syncing will be implemented separately
+        res.status(200).json({
+            success: true,
+            message: `Successfully fetched LeetCode stats for ${normalizedStats.username}`,
+            data: {
+                username: normalizedStats.username,
+                userId: normalizedStats.userId,
+                stats: normalizedStats.stats,
+                lastSyncAt: normalizedStats.lastSyncAt
+            }
+        });
 
-    res.status(200).json({
-        success: true,
-        message: `Synced ${savedProblems.length} problems from LeetCode`,
-        data: {
-            totalSynced: savedProblems.length,
-            solvedCount: leetcodeData.solvedCount,
-            recentProblems: savedProblems.slice(0, 5) // Return first 5 as preview
+    } catch (error) {
+        // Handle provider errors with proper status codes
+        if (error.notFound) {
+            return next(new AppError(error.message, 404));
         }
-    });
+        if (error.graphqlError) {
+            return next(new AppError(error.message, 502));
+        }
+        if (error.rateLimited) {
+            return next(new AppError(error.message, 429));
+        }
+        if (error.statusCode) {
+            return next(new AppError(error.message, error.statusCode));
+        }
+        throw error;
+    }
 });
 
 /**
  * GET /api/leetcode/problems
- * Retrieve user's synced problems from MongoDB
- * Query parameters: ?difficulty=Medium&limit=10&offset=0
+ * Retrieve user's synced problems with filters
+ * Query: ?difficulty=Medium&topic=Array&limit=20&offset=0
  */
-const getUserProblems = asyncHandler(async (req, res) => {
+const getUserProblems = asyncHandler(async (req, res, next) => {
     const userId = req.user._id;
     const { difficulty, topic, limit = 20, offset = 0 } = req.query;
 
-    // Build query filters dynamically
-    const queryFilter = { userId };
+    // Build query filter
+    const filter = { userId };
 
     if (difficulty) {
         if (!['Easy', 'Medium', 'Hard'].includes(difficulty)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Difficulty must be Easy, Medium, or Hard'
-            });
+            return next(new AppError('Difficulty must be Easy, Medium, or Hard', 400));
         }
-        queryFilter.difficulty = difficulty;
+        filter.difficulty = difficulty;
     }
 
     if (topic) {
-        queryFilter.topics = { $in: [topic] }; // $in finds documents where topic array contains the value
+        filter.topics = { $in: [topic.toLowerCase()] };
     }
 
     // Validate pagination
-    const parsedLimit = Math.min(Math.max(parseInt(limit), 1), 100); // Ensure between 1-100
-    const parsedOffset = Math.max(parseInt(offset), 0);
+    const pageLimit = Math.min(Math.max(parseInt(limit), 1), 100);
+    const pageOffset = Math.max(parseInt(offset), 0);
 
-    // Execute query with pagination
+    // Query database
     const [problems, totalCount] = await Promise.all([
-        Problem.find(queryFilter)
-            .sort({ solvedAt: -1 }) // Most recent first
-            .limit(parsedLimit)
-            .skip(parsedOffset)
-            .select('-__v'), // Exclude MongoDB version field
-        Problem.countDocuments(queryFilter)
+        Problem.find(filter)
+            .sort({ solvedAt: -1 })
+            .limit(pageLimit)
+            .skip(pageOffset)
+            .lean(),
+        Problem.countDocuments(filter)
     ]);
 
-    // Calculate pagination metadata
-    const totalPages = Math.ceil(totalCount / parsedLimit);
-    const currentPage = Math.floor(parsedOffset / parsedLimit) + 1;
+    const totalPages = Math.ceil(totalCount / pageLimit);
+    const currentPage = Math.floor(pageOffset / pageLimit) + 1;
 
     res.status(200).json({
         success: true,
@@ -113,7 +114,7 @@ const getUserProblems = asyncHandler(async (req, res) => {
             totalCount,
             totalPages,
             currentPage,
-            pageSize: parsedLimit,
+            pageSize: pageLimit,
             hasMore: currentPage < totalPages
         }
     });
@@ -121,13 +122,13 @@ const getUserProblems = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/leetcode/stats
- * Get summary statistics about user's solved problems
+ * Get problem-solving statistics for user
  */
 const getLeetCodeStats = asyncHandler(async (req, res) => {
     const userId = req.user._id;
 
-    // Aggregate data by difficulty
-    const stats = await Problem.aggregate([
+    // Get difficulty breakdown
+    const difficultyStats = await Problem.aggregate([
         { $match: { userId } },
         {
             $group: {
@@ -138,7 +139,7 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
         { $sort: { _id: 1 } }
     ]);
 
-    // Aggregate data by topic
+    // Get top topics
     const topicStats = await Problem.aggregate([
         { $match: { userId } },
         { $unwind: '$topics' },
@@ -149,33 +150,27 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
             }
         },
         { $sort: { count: -1 } },
-        { $limit: 10 } // Top 10 topics
+        { $limit: 10 }
     ]);
 
-    // Get total solved
+    // Get total count
     const totalSolved = await Problem.countDocuments({ userId });
 
-    // Calculate difficulty breakdown
-    const difficultyBreakdown = {
-        easy: 0,
-        medium: 0,
-        hard: 0
-    };
-
-    stats.forEach(stat => {
-        if (stat._id === 'Easy') difficultyBreakdown.easy = stat.count;
-        if (stat._id === 'Medium') difficultyBreakdown.medium = stat.count;
-        if (stat._id === 'Hard') difficultyBreakdown.hard = stat.count;
+    // Build breakdown object
+    const breakdown = { easy: 0, medium: 0, hard: 0, null: 0 };
+    difficultyStats.forEach(stat => {
+        const key = stat._id ? stat._id.toLowerCase() : 'null';
+        if (key in breakdown) breakdown[key] = stat.count;
     });
 
     res.status(200).json({
         success: true,
         data: {
             totalSolved,
-            difficultyBreakdown,
-            topTopics: topicStats.map(topic => ({
-                name: topic._id,
-                count: topic.count
+            difficultyBreakdown: breakdown,
+            topTopics: topicStats.map(t => ({
+                name: t._id,
+                count: t.count
             }))
         }
     });
