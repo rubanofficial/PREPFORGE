@@ -184,6 +184,11 @@ async function fetchAcceptedProblems(username) {
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
+    // **CRITICAL DEBUG LOGGING** - Inspect REAL response structure
+    console.log(`🔎 DEBUG: Full response.data type:`, typeof response.data);
+    console.log(`🔎 DEBUG: Full response.data:`, JSON.stringify(response.data, null, 2));
+    console.log(`🔎 DEBUG: response.data keys:`, Object.keys(response.data || {}));
+
     // Check if response has data
     if (!response.data) {
       console.warn(`⚠️  Provider: Empty response data for user "${username}"`);
@@ -194,14 +199,53 @@ async function fetchAcceptedProblems(username) {
       };
     }
 
-    // Alfa API returns { submissionList: [...] } or similar structure
-    const submissionList = response.data.submissionList || response.data.submissions || response.data;
+    // Try multiple possible response structures
+    let submissionList = null;
 
+    // Structure 1: { submissionList: [...] }
+    if (Array.isArray(response.data.submissionList)) {
+      console.log(`✅ Provider: Detected structure: { submissionList: [...] }`);
+      submissionList = response.data.submissionList;
+    }
+    // Structure 2: { submissions: [...] }
+    else if (Array.isArray(response.data.submissions)) {
+      console.log(`✅ Provider: Detected structure: { submissions: [...] }`);
+      submissionList = response.data.submissions;
+    }
+    // Structure 3: Response IS the array itself
+    else if (Array.isArray(response.data)) {
+      console.log(`✅ Provider: Detected structure: response.data is direct array`);
+      submissionList = response.data;
+    }
+    // Structure 4: { data: [...] }
+    else if (Array.isArray(response.data.data)) {
+      console.log(`✅ Provider: Detected structure: { data: [...] }`);
+      submissionList = response.data.data;
+    }
+    // Structure 5: Check for nested structures under different keys
+    else {
+      // Try to find any array in the response
+      for (const [key, value] of Object.entries(response.data)) {
+        if (Array.isArray(value)) {
+          console.log(`✅ Provider: Found array at key "${key}"`);
+          submissionList = value;
+          break;
+        }
+      }
+    }
+
+    // Validate we got an array
     if (!Array.isArray(submissionList)) {
-      console.warn(`⚠️  Provider: Unexpected response format for user "${username}"`);
+      console.error(`❌ Provider: Could not find array in response`);
+      console.error(`   Response structure:`, {
+        type: typeof response.data,
+        isArray: Array.isArray(response.data),
+        keys: Object.keys(response.data || {}),
+        sample: JSON.stringify(response.data).substring(0, 200)
+      });
       return {
         error: 'INVALID_FORMAT',
-        message: 'API returned unexpected response format',
+        message: 'API returned unexpected response format (not an array)',
         statusCode: 502
       };
     }
@@ -214,6 +258,9 @@ async function fetchAcceptedProblems(username) {
         statusCode: 404
       };
     }
+
+    // Log sample of first item to understand structure
+    console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
 
     console.log(`✅ Provider: Successfully fetched ${submissionList.length} accepted problems`);
 

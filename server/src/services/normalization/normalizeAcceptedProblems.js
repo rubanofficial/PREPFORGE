@@ -37,44 +37,125 @@
 /**
  * Normalize a single accepted submission from Alfa LeetCode API
  * 
- * Alfa API returns: { title, titleSlug, timestamp, ... }
- * We extract ONLY what we need for our database
- * 
  * @param {Object} submission - Raw submission from Alfa LeetCode API
- * @returns {Object|null} Normalized problem object or null if invalid
+ * @param {number} index - Submission index
+ * @returns {Object|null}
  */
-function normalizeSubmission(submission) {
-    if (!submission) {
+function normalizeSubmission(submission, index = 0) {
+    if (!submission || typeof submission !== 'object') {
+        console.warn(
+            `⚠️  Normalization: Skipping submission ${index} (not an object)`,
+            submission
+        );
         return null;
     }
 
-    // Extract only the fields we need
-    const { title, titleSlug, timestamp } = submission;
+    // Inspect fields
+    const fields = Object.keys(submission);
+    console.log(`📋 Normalization: Submission ${index} fields:`, fields);
+
+    // Extract title
+    const title =
+        submission.title ||
+        submission.name ||
+        submission.problemName;
+
+    // Validate title exists
+    if (!title || typeof title !== 'string') {
+        console.warn(
+            `⚠️  Normalization: Submission ${index} missing title field`,
+            { fields: Object.keys(submission) }
+        );
+        return null;
+    }
+
+    // Extract slug
+    const titleSlug =
+        submission.titleSlug ||
+        submission.slug ||
+        submission.title_slug ||
+        submission.problem_slug;
+
+    // Validate slug exists
+    if (!titleSlug || typeof titleSlug !== 'string') {
+        console.warn(
+            `⚠️  Normalization: Submission ${index} missing titleSlug field`,
+            { title }
+        );
+        return null;
+    }
+
+    // Extract timestamp
+    const timestamp =
+        submission.timestamp ||
+        submission.submittedAt ||
+        submission.submission_date ||
+        submission.submissionDate;
 
     // Validate required fields
     if (!title || !titleSlug || timestamp === undefined) {
-        console.warn(`⚠️  Normalization: Skipping invalid submission (missing required fields)`, {
-            title: title ? '✓' : '✗',
-            titleSlug: titleSlug ? '✓' : '✗',
-            timestamp: timestamp !== undefined ? '✓' : '✗'
-        });
+        console.warn(
+            `⚠️  Normalization: Skipping submission ${index} (missing required fields)`,
+            {
+                title: title ? '✓' : '✗',
+                titleSlug: titleSlug ? '✓' : '✗',
+                timestamp: timestamp !== undefined ? '✓' : '✗',
+                availableFields: fields
+            }
+        );
+
         return null;
     }
 
-    // Convert timestamp to Date object
-    // Alfa API returns timestamp in seconds (Unix epoch)
+    // Parse timestamp
     let solvedAt;
+
     if (typeof timestamp === 'string') {
-        solvedAt = new Date(parseInt(timestamp) * 1000);
+        if (timestamp.includes('-') || timestamp.includes('T')) {
+            // ISO format
+            solvedAt = new Date(timestamp);
+        } else {
+            // Numeric string
+            const num = parseInt(timestamp);
+
+            solvedAt =
+                num < 4102444800000
+                    ? new Date(num * 1000)
+                    : new Date(num);
+        }
+    } else if (typeof timestamp === 'number') {
+        solvedAt =
+            timestamp < 4102444800000
+                ? new Date(timestamp * 1000)
+                : new Date(timestamp);
     } else {
-        solvedAt = new Date(timestamp * 1000);
+        console.warn(
+            `⚠️  Normalization: Invalid timestamp type:`,
+            typeof timestamp,
+            timestamp
+        );
+
+        return null;
     }
 
     // Validate date
     if (isNaN(solvedAt.getTime())) {
-        console.warn(`⚠️  Normalization: Invalid timestamp:`, timestamp);
+        console.warn(
+            `⚠️  Normalization: Invalid/unparseable timestamp:`,
+            timestamp
+        );
+
         return null;
     }
+
+    console.log(
+        `✅ Normalization: Successfully normalized submission ${index}`,
+        {
+            title,
+            titleSlug,
+            solvedAt: solvedAt.toISOString()
+        }
+    );
 
     return {
         title: title.trim(),
@@ -87,48 +168,26 @@ function normalizeSubmission(submission) {
 /**
  * Normalize accepted problems response from Alfa LeetCode API provider
  * 
- * INPUT EXAMPLE (raw Alfa API response):
- * {
- *   username: 's_ruban',
- *   submissions: [
- *     { title: 'Two Sum', titleSlug: 'two-sum', timestamp: 1234567890 },
- *     { title: 'Add Two Numbers', titleSlug: 'add-two-numbers', timestamp: 1234567891 },
- *     ...
- *   ],
- *   fetchedAt: '2026-05-20T10:30:00.000Z'
- * }
- * 
- * OUTPUT EXAMPLE (normalized for our database):
- * {
- *   username: 's_ruban',
- *   problems: [
- *     { title: 'Two Sum', titleSlug: 'two-sum', solvedAt: Date, platform: 'leetcode' },
- *     { title: 'Add Two Numbers', titleSlug: 'add-two-numbers', solvedAt: Date, platform: 'leetcode' },
- *     ...
- *   ],
- *   stats: {
- *     total: 2,
- *     valid: 2,
- *     invalid: 0,
- *     duplicates: 0
- *   },
- *   normalizedAt: Date
- * }
- * 
- * @param {Object} rawResponse - Raw response from provider
- * @param {string} userId - MongoDB user ID
- * @returns {Object} Normalized problems with metadata
+ * @param {Object} rawResponse
+ * @param {string} userId
+ * @returns {Object}
  */
 export function normalizeAcceptedProblems(rawResponse, userId) {
-    console.log(`📝 Normalization: Processing accepted problems for user ${userId}`);
+    console.log(
+        `📝 Normalization: Processing accepted problems for user ${userId}`
+    );
 
     // Validate input
     if (!rawResponse) {
-        throw new Error('Normalization: Invalid raw response (null/undefined)');
+        throw new Error(
+            'Normalization: Invalid raw response (null/undefined)'
+        );
     }
 
     if (!rawResponse.data) {
-        throw new Error('Normalization: Response missing data field');
+        throw new Error(
+            'Normalization: Response missing data field'
+        );
     }
 
     const {
@@ -136,33 +195,59 @@ export function normalizeAcceptedProblems(rawResponse, userId) {
         submissions = []
     } = rawResponse.data;
 
-    // Track stats
+    // Validate submissions
+    if (!Array.isArray(submissions)) {
+        console.error(
+            `❌ Normalization: submissions is not an array:`,
+            typeof submissions
+        );
+
+        throw new Error(
+            'Normalization: submissions field is not an array'
+        );
+    }
+
+    // Stats
     let validCount = 0;
     let invalidCount = 0;
-    const seenProblems = new Set(); // Track duplicates
     let duplicateCount = 0;
 
-    console.log(`📊 Normalization: Processing ${submissions.length} submissions...`);
+    const seenProblems = new Set();
 
-    // Normalize each submission
+    console.log(
+        `📊 Normalization: Processing ${submissions.length} submissions...`
+    );
+
+    // Normalize submissions
     const problems = submissions
         .map((submission, index) => {
-            const normalized = normalizeSubmission(submission);
+            const normalized = normalizeSubmission(
+                submission,
+                index
+            );
 
+            // Invalid submission
             if (!normalized) {
                 invalidCount++;
                 return null;
             }
 
-            // Check for duplicates (by titleSlug)
+            // Duplicate check
             if (seenProblems.has(normalized.titleSlug)) {
-                console.warn(`⚠️  Normalization: Duplicate problem "${normalized.titleSlug}" (index: ${index})`);
                 duplicateCount++;
+
+                console.log(
+                    `🔁 Duplicate skipped: ${normalized.titleSlug}`
+                );
+
                 return null;
             }
 
+            // Add to set
             seenProblems.add(normalized.titleSlug);
+
             validCount++;
+
             return normalized;
         })
         .filter(problem => problem !== null);
@@ -177,13 +262,17 @@ export function normalizeAcceptedProblems(rawResponse, userId) {
     return {
         userId,
         username,
-        problems, // Clean normalized problems: only title, titleSlug, solvedAt, platform
+
+        // Clean normalized problems
+        problems,
+
         stats: {
             total: submissions.length,
             valid: validCount,
             invalid: invalidCount,
             duplicates: duplicateCount
         },
+
         normalizedAt: new Date()
     };
 }
@@ -191,18 +280,44 @@ export function normalizeAcceptedProblems(rawResponse, userId) {
 /**
  * Build MongoDB document from normalized problem
  * 
- * Adds required fields for MongoDB insertion:
- * - userId reference
- * - Indexed timestamp for sorting
- * - Ready for schema validation
- * 
- * @param {Object} normalizedProblem - Normalized problem from normalization layer
- * @param {string} userId - MongoDB user ID
- * @returns {Object} Ready for MongoDB insertion
+ * @param {Object} normalizedProblem
+ * @param {string} userId
+ * @returns {Object}
  */
-export function buildProblemDocument(normalizedProblem, userId) {
-    if (!normalizedProblem || !userId) {
-        throw new Error('Missing required fields for document building');
+export function buildProblemDocument(
+    normalizedProblem,
+    userId
+) {
+    // Detailed validation
+    if (!normalizedProblem) {
+        throw new Error(
+            `Missing required fields for document building: normalizedProblem is ${typeof normalizedProblem}`
+        );
+    }
+
+    if (!userId) {
+        throw new Error(
+            `Missing required fields for document building: userId is ${typeof userId}`
+        );
+    }
+
+    // Validate required fields in normalized problem
+    if (!normalizedProblem.title || typeof normalizedProblem.title !== 'string') {
+        throw new Error(
+            `Missing required fields for document building: title is missing or invalid (${typeof normalizedProblem.title})`
+        );
+    }
+
+    if (!normalizedProblem.titleSlug || typeof normalizedProblem.titleSlug !== 'string') {
+        throw new Error(
+            `Missing required fields for document building: titleSlug is missing or invalid (${typeof normalizedProblem.titleSlug})`
+        );
+    }
+
+    if (!normalizedProblem.solvedAt) {
+        throw new Error(
+            `Missing required fields for document building: solvedAt is missing (${typeof normalizedProblem.solvedAt})`
+        );
     }
 
     return {
@@ -210,9 +325,14 @@ export function buildProblemDocument(normalizedProblem, userId) {
         titleSlug: normalizedProblem.titleSlug,
         platform: normalizedProblem.platform || 'leetcode',
         solvedAt: normalizedProblem.solvedAt,
-        userId, // MongoDB reference
-        difficulty: null, // Can be enriched later
-        topics: [], // Can be enriched later
+
+        // MongoDB reference
+        userId,
+
+        // Future enrichment fields
+        difficulty: null,
+        topics: [],
+
         createdAt: new Date(),
         updatedAt: new Date()
     };

@@ -49,7 +49,7 @@ const syncLeetCodeProblems = asyncHandler(async (req, res, next) => {
  */
 const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
     const { leetcodeUsername } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.userId;
 
     // ===== INPUT VALIDATION =====
     if (!leetcodeUsername || typeof leetcodeUsername !== 'string') {
@@ -181,6 +181,16 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
 
     } catch (error) {
         console.error(`❌ SYNC ERROR:`, error.message);
+        console.error(`   Stack:`, error.stack);
+
+        // Handle normalization errors (from provider response format issues)
+        if (error.message && error.message.includes('Normalization')) {
+            console.error(`❌ Normalization Error: Provider response format mismatch`);
+            return next(new AppError(
+                `Normalization failed: ${error.message}. Provider returned unexpected response structure.`,
+                502
+            ));
+        }
 
         // Handle specific error types
         if (error.notFound) {
@@ -195,6 +205,13 @@ const syncAcceptedProblems = asyncHandler(async (req, res, next) => {
         if (error.statusCode) {
             return next(new AppError(error.message, error.statusCode));
         }
+
+        // Generic error - log full details for debugging
+        console.error(`❌ Unexpected error:`, {
+            name: error.name,
+            message: error.message,
+            code: error.code
+        });
 
         throw error;
     }
