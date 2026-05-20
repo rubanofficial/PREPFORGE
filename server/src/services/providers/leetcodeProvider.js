@@ -224,11 +224,11 @@ async function fetchSolvedStats(username) {
     // Extract stats - Handle different field name variations
     // The API response might have: solvedProblem, totalSolved, total
     let totalSolved = response.data.solvedProblem || response.data.totalSolved || response.data.total || 0;
-    
+
     const easySolved = response.data.easySolved || 0;
     const mediumSolved = response.data.mediumSolved || 0;
     const hardSolved = response.data.hardSolved || 0;
-    
+
     // If totalSolved is not provided, calculate from difficulty breakdown
     if (totalSolved === 0 && (easySolved > 0 || mediumSolved > 0 || hardSolved > 0)) {
       totalSolved = easySolved + mediumSolved + hardSolved;
@@ -322,19 +322,19 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
 
   // Apply safe upper limit protection
   const effectiveLimit = Math.min(limit, SAFE_UPPER_LIMIT);
-  
+
   if (limit > SAFE_UPPER_LIMIT) {
     console.warn(`⚠️  Provider: Limit ${limit} exceeds safe upper limit ${SAFE_UPPER_LIMIT}, capping to ${effectiveLimit}`);
   }
 
   try {
     const client = createAxiosInstance();
-    
+
     // Try /submission endpoint first (more common variant)
     // Try multiple parameter variations for pagination
     let endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}&skip=${offset}`;
     console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
-    
+
     let response;
     try {
       response = await client.get(endpoint);
@@ -446,9 +446,9 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
     if (offset === 0) {
       console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
     }
-    
+
     console.log(`📋 Provider: Fetched ${submissionList.length} problems (limit=${effectiveLimit}, offset=${offset})`);
-    
+
     // **CRITICAL WARNING**: If fetched < limit, API might have max page size or end reached
     if (submissionList.length < effectiveLimit) {
       console.warn(`⚠️  Provider: Received fewer items than requested (${submissionList.length} < ${effectiveLimit})`);
