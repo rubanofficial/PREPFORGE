@@ -1,87 +1,12 @@
 import axios from 'axios';
 
-/**
- * PROVIDER LAYER - Alfa LeetCode API Data Fetching
- * 
- * What is a Provider?
- * A provider is a service that handles external API communication.
- * It acts as a gateway between your application and third-party services.
- * 
- * Why Provider Abstraction?
- * 1. ISOLATION: If API changes, only this file needs updates
- * 2. TESTABILITY: Easy to mock for unit tests
- * 3. CONSISTENCY: Single point of error handling and logging
- * 4. FLEXIBILITY: Can swap to different provider/endpoint later without changing app
- * 5. SEPARATION OF CONCERNS: API communication separate from business logic
- * 
- * WHY ALFA-LEETCODE-API?
- * ✅ REST API (no GraphQL schema hell)
- * ✅ Abstracts LeetCode GraphQL internally
- * ✅ Simple endpoint for accepted problems
- * ✅ No schema drift problems
- * ✅ Lightweight responses
- * ✅ Reliable and maintained
- */
-
 const ALFA_LEETCODE_API = 'https://alfa-leetcode-api.onrender.com';
 
-// Configuration
-const API_TIMEOUT = 30000; // 30 seconds
+const API_TIMEOUT = 30000;
 const MAX_RETRIES = 1;
 
-/**
- * SAFE UPPER LIMIT PROTECTION
- * 
- * Why this matters:
- * 1. BACKEND PROTECTION: Prevents massive API calls from overloading our server
- * 2. PROVIDER PROTECTION: Respects rate limits and provider capacity
- * 3. DATABASE PROTECTION: Prevents sudden huge insertions
- * 4. NETWORK PROTECTION: Limits payload size to prevent timeouts
- * 5. RESOURCE PROTECTION: Manages memory during processing
- * 
- * Real-world example:Node.js v22.14.0
-[nodemon] app crashed - waiting for file changes before starting...
-[nodemon] restarting due to changes...
-[nodemon] starting `node src/server.js`
-[nodemon] restarting due to changes...
-[nodemon] starting `node src/server.js`
-MongoDB Connected: localhost
-node:events:496
-      throw er; // Unhandled 'error' event
-      ^
+const SAFE_UPPER_LIMIT = 3000;
 
-Error: listen EADDRINUSE: address already in use :::5000
-    at Server.setupListenHandle [as _listen2] (node:net:1937:16)
-    at listenInCluster (node:net:1994:12)
-    at Server.listen (node:net:2099:7)
-    at file:///D:/WEB/project/PREPFORGE/server/src/server.js:68:12
-    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-Emitted 'error' event on Server instance at:
-    at emitErrorNT (node:net:1973:8)
-    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
-  code: 'EADDRINUSE',
-  errno: -4091,
-  syscall: 'listen',
-  address: '::',
-  port: 5000
-}
-
-Node.js v22.14.0
-[nodemon] app crashed - waiting for file changes before starting...
-
- * - A user with 5000+ solved problems would create enormous payloads
- * - Setting upper limit to 3000 ensures:
- *   - API response stays <50MB
- *   - Normalization completes quickly
- *   - Deduplication is fast
- *   - MongoDB batch insert is safe
- *   - No OOM errors on server
- */
-const SAFE_UPPER_LIMIT = 3000; // Max problems to fetch in one sync
-
-/**
- * Axios instance for Alfa LeetCode API
- */
 function createAxiosInstance() {
   return axios.create({
     baseURL: ALFA_LEETCODE_API,
@@ -92,12 +17,6 @@ function createAxiosInstance() {
   });
 }
 
-/**
- * Handles common API errors and logs them appropriately
- * @param {Error} error - Error object from API call
- * @param {string} operation - What operation failed (for logging)
- * @returns {Object} Structured error response
- */
 function handleApiError(error, operation) {
   console.error(`❌ Alfa API Error [${operation}]:`, {
     message: error.message,
@@ -106,7 +25,6 @@ function handleApiError(error, operation) {
     timestamp: new Date().toISOString()
   });
 
-  // Network/Timeout errors
   if (error.code === 'ECONNABORTED') {
     return {
       error: 'TIMEOUT',
@@ -115,7 +33,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // Host not found
   if (error.code === 'ENOTFOUND') {
     return {
       error: 'NETWORK_ERROR',
@@ -124,7 +41,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // User not found
   if (error.response?.status === 404) {
     return {
       error: 'USER_NOT_FOUND',
@@ -133,7 +49,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // Rate limited
   if (error.response?.status === 429) {
     return {
       error: 'RATE_LIMITED',
@@ -142,7 +57,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // Bad request
   if (error.response?.status === 400) {
     return {
       error: 'BAD_REQUEST',
@@ -151,7 +65,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // Generic HTTP error
   if (error.response?.status) {
     return {
       error: 'HTTP_ERROR',
@@ -160,7 +73,6 @@ function handleApiError(error, operation) {
     };
   }
 
-  // Unknown error
   return {
     error: 'API_ERROR',
     message: error.message || 'Unknown API error',
@@ -168,11 +80,6 @@ function handleApiError(error, operation) {
   };
 }
 
-/**
- * Validates LeetCode username format
- * @param {string} username - Username to validate
- * @returns {boolean} True if valid, false otherwise
- */
 function validateUsername(username) {
   if (!username || typeof username !== 'string') {
     return false;
@@ -180,7 +87,6 @@ function validateUsername(username) {
 
   const trimmed = username.trim();
 
-  // LeetCode usernames: 1-50 chars, alphanumeric + dash/underscore
   if (trimmed.length < 1 || trimmed.length > 50) {
     return false;
   }
@@ -192,31 +98,9 @@ function validateUsername(username) {
   return true;
 }
 
-/**
- * Fetch solved problem statistics for a user
- * 
- * Uses Alfa LeetCode API REST endpoint: /:username/solved
- * 
- * Returns:
- * - totalSolved: Total number of problems solved
- * - easySolved: Number of easy problems solved
- * - mediumSolved: Number of medium problems solved
- * - hardSolved: Number of hard problems solved
- * 
- * WHY FETCH STATS FIRST?
- * 1. DYNAMIC LIMIT: Use total count as limit for acSubmission
- * 2. OPTIMIZATION: Skip fetching if user has 0 problems
- * 3. PROGRESS TRACKING: Know how many total we're syncing
- * 4. DEDUPLICATION: Compare new sync count vs database
- * 5. USER AWARENESS: Can notify user of progress
- * 
- * @param {string} username - LeetCode username
- * @returns {Object} Raw provider response with solved stats
- */
 async function fetchSolvedStats(username) {
   console.log(`📊 Provider: Fetching solved stats for "${username}"`);
 
-  // Validate input
   if (!validateUsername(username)) {
     console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
     return {
@@ -235,7 +119,6 @@ async function fetchSolvedStats(username) {
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
-    // Debug log
     console.log(`🔎 DEBUG [fetchSolvedStats]: Response structure:`, {
       type: typeof response.data,
       keys: Object.keys(response.data || {})
@@ -250,15 +133,12 @@ async function fetchSolvedStats(username) {
       };
     }
 
-    // Extract stats - Handle different field name variations
-    // The API response might have: solvedProblem, totalSolved, total
     let totalSolved = response.data.solvedProblem || response.data.totalSolved || response.data.total || 0;
 
     const easySolved = response.data.easySolved || 0;
     const mediumSolved = response.data.mediumSolved || 0;
     const hardSolved = response.data.hardSolved || 0;
 
-    // If totalSolved is not provided, calculate from difficulty breakdown
     if (totalSolved === 0 && (easySolved > 0 || mediumSolved > 0 || hardSolved > 0)) {
       totalSolved = easySolved + mediumSolved + hardSolved;
       console.log(`✅ Provider: Calculated totalSolved from difficulty breakdown: ${totalSolved}`);
@@ -300,28 +180,9 @@ async function fetchSolvedStats(username) {
   }
 }
 
-/**
- * Fetch accepted (solved) problems for a user with dynamic limit and offset
- * 
- * Uses Alfa LeetCode API REST endpoint: /:username/submission?limit=N&skip=offset
- * Note: Some versions use /acSubmission, we try /submission first
- * 
- * WHY DYNAMIC LIMIT WITH PAGINATION?
- * 1. SCALABILITY: Fetch only what the user has solved
- * 2. COMPLETENESS: Don't hardcode "fetch 20" - fetch ALL via pagination
- * 3. EFFICIENCY: Use stats to know exact limit needed
- * 4. SAFETY: Upper limit protection prevents overload
- * 
- * Parameters:
- * @param {string} username - LeetCode username
- * @param {number} limit - Problems to fetch per request
- * @param {number} offset - Skip this many problems (for pagination)
- * @returns {Object} Raw provider response with accepted problems
- */
 async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
   console.log(`🔍 Provider: Fetching accepted problems for "${username}" with limit=${limit}, offset=${offset}`);
 
-  // Validate input
   if (!validateUsername(username)) {
     console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
     return {
@@ -349,7 +210,6 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
     };
   }
 
-  // Apply safe upper limit protection
   const effectiveLimit = Math.min(limit, SAFE_UPPER_LIMIT);
 
   if (limit > SAFE_UPPER_LIMIT) {
@@ -359,27 +219,26 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
   try {
     const client = createAxiosInstance();
 
-    // Try /submission endpoint first (more common variant)
-    // Try multiple parameter variations for pagination
     let endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}&skip=${offset}`;
     console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
 
     let response;
+
     try {
       response = await client.get(endpoint);
     } catch (firstError) {
-      // Try without skip parameter
       if (firstError.response?.status === 404 || firstError.code === 'ERR_BAD_REQUEST') {
         endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}`;
         console.log(`⚠️  Provider: Retrying without skip parameter`);
         console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+
         try {
           response = await client.get(endpoint);
         } catch (secondError) {
-          // Try /acSubmission endpoint
           endpoint = `/${username.trim()}/acSubmission?limit=${effectiveLimit}&skip=${offset}`;
           console.log(`⚠️  Provider: Trying /acSubmission endpoint`);
           console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
+
           try {
             response = await client.get(endpoint);
           } catch (thirdError) {
@@ -393,15 +252,15 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
-    // **CRITICAL DEBUG LOGGING** - Inspect REAL response structure
     console.log(`🔎 DEBUG [fetchAcceptedProblems]: Response structure:`, {
       type: typeof response.data,
       isArray: Array.isArray(response.data),
       keys: Object.keys(response.data || {}),
-      dataLength: Array.isArray(response.data) ? response.data.length : (response.data?.submissions?.length || 'unknown')
+      dataLength: Array.isArray(response.data)
+        ? response.data.length
+        : (response.data?.submissions?.length || 'unknown')
     });
 
-    // Check if response has data
     if (!response.data) {
       console.warn(`⚠️  Provider: Empty response data for user "${username}"`);
       return {
@@ -411,32 +270,21 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       };
     }
 
-    // Try multiple possible response structures
     let submissionList = null;
 
-    // Structure 1: { submissionList: [...] }
     if (Array.isArray(response.data.submissionList)) {
       console.log(`✅ Provider: Detected structure: { submissionList: [...] }`);
       submissionList = response.data.submissionList;
-    }
-    // Structure 2: { submissions: [...] }
-    else if (Array.isArray(response.data.submissions)) {
+    } else if (Array.isArray(response.data.submissions)) {
       console.log(`✅ Provider: Detected structure: { submissions: [...] }`);
       submissionList = response.data.submissions;
-    }
-    // Structure 3: Response IS the array itself
-    else if (Array.isArray(response.data)) {
+    } else if (Array.isArray(response.data)) {
       console.log(`✅ Provider: Detected structure: response.data is direct array`);
       submissionList = response.data;
-    }
-    // Structure 4: { data: [...] }
-    else if (Array.isArray(response.data.data)) {
+    } else if (Array.isArray(response.data.data)) {
       console.log(`✅ Provider: Detected structure: { data: [...] }`);
       submissionList = response.data.data;
-    }
-    // Structure 5: Check for nested structures under different keys
-    else {
-      // Try to find any array in the response
+    } else {
       for (const [key, value] of Object.entries(response.data)) {
         if (Array.isArray(value)) {
           console.log(`✅ Provider: Found array at key "${key}"`);
@@ -446,7 +294,6 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       }
     }
 
-    // Validate we got an array
     if (!Array.isArray(submissionList)) {
       console.error(`❌ Provider: Could not find array in response`);
       console.error(`   Response structure:`, {
@@ -455,6 +302,7 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
         keys: Object.keys(response.data || {}),
         sample: JSON.stringify(response.data).substring(0, 200)
       });
+
       return {
         error: 'INVALID_FORMAT',
         message: 'API returned unexpected response format (not an array)',
@@ -464,6 +312,7 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
 
     if (submissionList.length === 0) {
       console.warn(`⚠️  Provider: No accepted submissions found for user "${username}"`);
+
       return {
         error: 'NO_SUBMISSIONS',
         message: `User "${username}" has no accepted submissions`,
@@ -471,14 +320,12 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       };
     }
 
-    // Log sample of first item to understand structure
     if (offset === 0) {
       console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
     }
 
     console.log(`📋 Provider: Fetched ${submissionList.length} problems (limit=${effectiveLimit}, offset=${offset})`);
 
-    // **CRITICAL WARNING**: If fetched < limit, API might have max page size or end reached
     if (submissionList.length < effectiveLimit) {
       console.warn(`⚠️  Provider: Received fewer items than requested (${submissionList.length} < ${effectiveLimit})`);
       console.warn(`   This means: API hit end of results OR has max page size`);
@@ -506,33 +353,6 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
   }
 }
 
-/**
- * Export provider functions
- * 
- * PROVIDER RESPONSIBILITIES:
- * ✅ Fetch data from Alfa LeetCode API
- * ✅ Handle errors and timeouts
- * ✅ Log API issues (detailed logs)
- * ✅ Return raw provider data only
- * ✅ Handle invalid usernames
- * ✅ Validate API responses
- * ✅ Apply safe limits
- * 
- * NOT PROVIDER RESPONSIBILITIES:
- * ❌ Normalize data
- * ❌ Insert into MongoDB
- * ❌ Calculate analytics
- * ❌ Validate business logic
- * ❌ Transform data structure
- * ❌ Handle duplicates
- * 
- * Why keep provider lightweight?
- * 1. ISOLATION: Easy to replace with GFG/Codeforces provider later
- * 2. TESTABILITY: Can mock provider responses independently
- * 3. REUSABILITY: Controller can call provider for multiple purposes
- * 4. CLARITY: Provider = API calls, Normalization = data transformation
- * 5. MAINTAINABILITY: If API changes, only update provider
- */
 export const LeetcodeProvider = {
   fetchSolvedStats,
   fetchAcceptedProblems,
