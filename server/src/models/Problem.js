@@ -40,6 +40,14 @@ const problemSchema = new mongoose.Schema({
         required: true
     },
 
+    // Programming language used to solve (optional - can be enriched later)
+    language: {
+        type: String,
+        lowercase: true,
+        trim: true,
+        sparse: true, // Allow null/undefined
+    },
+
     // Topics (optional - can be enriched later)
     topics: [{
         type: String,

@@ -35,6 +35,27 @@ const userSchema = new mongoose.Schema(
             minlength: [6, 'Password must be at least 6 characters'],
             select: false, // Don't return password by default
         },
+        // ===== LEETCODE INTEGRATION =====
+        // Optional: User's LeetCode username for authenticated syncing
+        leetcodeUsername: {
+            type: String,
+            trim: true,
+            lowercase: true,
+            sparse: true, // Allow multiple null values
+        },
+        // Encrypted LEETCODE_SESSION cookie for authenticated API access
+        // Never returned in API responses
+        // Only used for background sync operations
+        encryptedLeetCodeSession: {
+            type: String,
+            select: false, // Never return this by default
+            sparse: true,
+        },
+        // Timestamp when session was last synced
+        lastLeetcodeSyncAt: {
+            type: Date,
+            default: null,
+        },
         createdAt: {
             type: Date,
             default: Date.now,

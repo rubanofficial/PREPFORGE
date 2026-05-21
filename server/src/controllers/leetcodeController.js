@@ -1,7 +1,13 @@
 import leetcodeProvider from '../services/providers/leetcodeProvider.js';
+import leetcodeAuthProvider from '../services/providers/leetcodeAuthProvider.js';
 import { normalizeLeetcodeStats } from '../services/normalization/normalizeLeetcodeData.js';
 import { normalizeAcceptedProblems, buildProblemDocument } from '../services/normalization/normalizeAcceptedProblems.js';
+import backgroundSyncService from '../services/sync/backgroundSyncService.js';
+import deepSyncService from '../services/sync/deepSyncService.js';
+import { encrypt } from '../utils/encryption.js';
 import Problem from '../models/Problem.js';
+import SyncJob from '../models/SyncJob.js';
+import User from '../models/User.js';
 import { asyncHandler, AppError } from '../utils/errorHandler.js';
 
 /**
@@ -416,6 +422,186 @@ const getUserProblems = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * POST /api/leetcode/start-sync
+ * Start background LeetCode sync job
+ *
+ * RETURNS IMMEDIATELY without waiting for sync to complete
+ *
+ * Flow:
+ * 1. Create SyncJob document (pending)
+ * 2. Spawn background sync task (NOT awaited)
+ * 3. Return syncJobId to client
+ * 4. Client can poll GET /sync-status/:syncJobId for progress
+ *
+ * WHY THIS WORKS:
+ * - Request lifecycle: User gets response in <100ms
+ * - Background task: Processes batches independently
+ * - Scalability: Multiple users can sync simultaneously
+ * - UX: No timeout waiting for long syncs
+ * - Foundation: Can upgrade to queue systems later
+ */
+const startBackgroundSync = asyncHandler(async (req, res, next) => {
+    const { leetcodeUsername } = req.body;
+    const userId = req.user.userId;
+
+    // Validate input
+    if (!leetcodeUsername || typeof leetcodeUsername !== 'string') {
+        return next(new AppError('LeetCode username is required', 400));
+    }
+
+    const username = leetcodeUsername.trim();
+    if (username.length < 2 || username.length > 50) {
+        return next(new AppError('Username must be 2-50 characters', 400));
+    }
+
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`📨 START-SYNC: Creating sync job for user ${userId}`);
+    console.log(`   Username: ${username}`);
+    console.log(`${'='.repeat(70)}\n`);
+
+    try {
+        // Create SyncJob in pending state
+        const syncJob = await SyncJob.create({
+            userId,
+            username: username.toLowerCase(),
+            status: 'pending'
+        });
+
+        console.log(`✅ SyncJob created: ${syncJob._id}`);
+
+        // Spawn background task - do NOT await this
+        // This allows us to return immediately to client
+        backgroundSyncService.startBackgroundSync(
+            syncJob._id.toString(),
+            username,
+            userId
+        ).catch(error => {
+            // Catch unhandled errors in background task
+            console.error(`❌ Background sync failed (unhandled):`, error);
+        });
+
+        console.log(`🚀 Background sync spawned (not awaited)`);
+        console.log(`✅ Returning syncJobId to client immediately\n`);
+
+        // Return immediately with sync job ID
+        res.status(202).json({
+            success: true,
+            message: 'Sync started in background',
+            data: {
+                syncJobId: syncJob._id,
+                username: username,
+                status: syncJob.status,
+                message: 'Use GET /api/leetcode/sync-status/:syncJobId to check progress'
+            }
+        });
+
+    } catch (error) {
+        console.error(`❌ Failed to create sync job:`, error.message);
+        return next(new AppError(`Failed to start sync: ${error.message}`, 500));
+    }
+});
+
+/**
+ * GET /api/leetcode/sync-status/:syncJobId
+ * Get progress of a background sync job
+ *
+ * Returns current state:
+ * - status: pending | active | completed | failed
+ * - progress: { processed, inserted, duplicates, failed }
+ * - timestamps: startedAt, completedAt
+ * - error: if status is 'failed'
+ *
+ * POLLING PATTERN:
+ * Client can poll this endpoint to show progress bar:
+ * - "Fetched 20 problems"
+ * - "Inserted 18, skipped 2 duplicates"
+ * - "Batch 5 complete"
+ * - "Sync finished! 127 new problems added"
+ */
+const getSyncStatus = asyncHandler(async (req, res, next) => {
+    const { syncJobId } = req.params;
+    const userId = req.user.userId;
+
+    // Validate syncJobId format
+    if (!syncJobId || syncJobId.length !== 24) {
+        return next(new AppError('Invalid syncJobId format', 400));
+    }
+
+    console.log(`📊 SYNC-STATUS: Checking job ${syncJobId}`);
+
+    try {
+        // Fetch sync job
+        const syncJob = await SyncJob.findById(syncJobId).select(
+            'userId username status progress startedAt completedAt error metadata'
+        );
+
+        if (!syncJob) {
+            return next(new AppError('Sync job not found', 404));
+        }
+
+        // Verify ownership - user can only check their own sync jobs
+        if (syncJob.userId.toString() !== userId) {
+            return next(new AppError('Not authorized to view this sync job', 403));
+        }
+
+        // Calculate elapsed time
+        const elapsedMs = syncJob.completedAt
+            ? syncJob.completedAt - syncJob.startedAt
+            : Date.now() - syncJob.startedAt;
+
+        const elapsedSeconds = Math.round(elapsedMs / 1000);
+
+        // Calculate progress percentage (if we know total expected)
+        let progressPercent = 0;
+        if (syncJob.progress.totalExpected > 0) {
+            progressPercent = Math.round(
+                (syncJob.progress.processed / syncJob.progress.totalExpected) * 100
+            );
+        }
+
+        console.log(`✅ Retrieved job status: ${syncJob.status}`);
+
+        // Build response
+        res.status(200).json({
+            success: true,
+            data: {
+                syncJobId: syncJob._id,
+                username: syncJob.username,
+                status: syncJob.status,
+
+                // Progress tracking
+                progress: {
+                    expectedProblems: syncJob.progress.totalExpected,
+                    fetchedFromProvider: syncJob.progress.processed,
+                    insertedToDatabase: syncJob.progress.inserted,
+                    duplicatesSkipped: syncJob.progress.duplicates,
+                    failedToProcess: syncJob.progress.failed,
+                    batchesCompleted: syncJob.progress.batchesProcessed
+                },
+
+                // Percentage complete
+                progressPercent,
+
+                // Timing
+                startedAt: syncJob.startedAt,
+                completedAt: syncJob.completedAt,
+                elapsedSeconds,
+
+                // For failed jobs
+                error: syncJob.error || null,
+
+                // Metadata for debugging
+                metadata: syncJob.metadata || {}
+            }
+        });
+
+    } catch (error) {
+        console.error(`❌ Error fetching sync status:`, error.message);
+        return next(new AppError(`Failed to get sync status: ${error.message}`, 500));
+    }
+});
+
+/**
  * GET /api/leetcode/stats
  * Get problem-solving statistics for user
  */
@@ -471,9 +657,209 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
     });
 });
 
+/**
+ * POST /api/leetcode/store-session
+ * Store encrypted LEETCODE_SESSION cookie for authenticated syncing
+ * 
+ * BODY:
+ * {
+ *   "leetcodeUsername": "john_doe",
+ *   "leetcodeSessionCookie": "LEETCODE_SESSION=eyJf..."
+ * }
+ * 
+ * SECURITY:
+ * - Cookie is encrypted before storing in database
+ * - Encryption key must be in ENCRYPTION_KEY env variable
+ * - Encrypted value is stored in User.encryptedLeetCodeSession
+ * - Never returned in API responses
+ * - Only used for background sync operations
+ * 
+ * WHY THIS ENDPOINT?
+ * - Users need a secure way to provide their session cookie
+ * - We encrypt it immediately
+ * - Backend stores encrypted value only
+ * - User can update/revoke session anytime
+ */
+const storeSession = asyncHandler(async (req, res, next) => {
+    const { leetcodeUsername, leetcodeSessionCookie } = req.body;
+    const userId = req.user.userId;
+
+    // Validate inputs
+    if (!leetcodeUsername || typeof leetcodeUsername !== 'string') {
+        return next(new AppError('LeetCode username is required', 400));
+    }
+
+    if (!leetcodeSessionCookie || typeof leetcodeSessionCookie !== 'string') {
+        return next(new AppError('LEETCODE_SESSION cookie is required', 400));
+    }
+
+    const username = leetcodeUsername.trim().toLowerCase();
+
+    if (username.length < 2 || username.length > 50) {
+        return next(new AppError('Username must be 2-50 characters', 400));
+    }
+
+    // Validate that cookie looks like a real session cookie
+    if (!leetcodeSessionCookie.includes('=') || leetcodeSessionCookie.length < 20) {
+        return next(new AppError('Invalid session cookie format', 400));
+    }
+
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🔐 STORE-SESSION: Encrypting and storing session`);
+    console.log(`   User: ${userId}`);
+    console.log(`   Username: ${username}`);
+    console.log(`${'='.repeat(70)}\n`);
+
+    try {
+        // Encrypt the session cookie
+        const encryptedSession = encrypt(leetcodeSessionCookie);
+
+        console.log(`✅ Session encrypted successfully`);
+
+        // Update user with encrypted session and username
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            {
+                leetcodeUsername: username,
+                encryptedLeetCodeSession: encryptedSession,
+                lastLeetcodeSyncAt: null, // Reset sync timestamp
+            },
+            { new: true, select: '-password -encryptedLeetCodeSession' }
+        );
+
+        if (!updatedUser) {
+            return next(new AppError('User not found', 404));
+        }
+
+        console.log(`✅ User updated with encrypted session`);
+        console.log(`   Username stored: ${username}\n`);
+
+        res.status(200).json({
+            success: true,
+            message: 'LeetCode session stored securely',
+            data: {
+                userId,
+                leetcodeUsername: username,
+                message: 'Session is encrypted. You can now start authenticated deep sync.'
+            }
+        });
+
+    } catch (error) {
+        console.error(`❌ Failed to store session:`, error.message);
+        return next(new AppError(`Failed to store session: ${error.message}`, 500));
+    }
+});
+
+/**
+ * POST /api/leetcode/start-deep-sync
+ * Start authenticated deep-sync using encrypted LEETCODE_SESSION
+ * 
+ * FLOW:
+ * 1. Verify user has stored session
+ * 2. Create SyncJob (pending)
+ * 3. Start background deep sync (NOT awaited)
+ * 4. Return immediately with syncJobId
+ * 
+ * BACKGROUND PROCESS:
+ * - Initializes authenticated LeetCode connection
+ * - Fetches all submissions with pagination
+ * - Normalizes and deduplicates
+ * - Inserts into database
+ * - Tracks progress in SyncJob
+ * - Handles errors gracefully
+ * 
+ * WHY BACKGROUND?
+ * - Deep sync can take 30+ seconds (depending on submission count)
+ * - Request timeout would kill the sync
+ * - User gets immediate response with syncJobId
+ * - Can poll GET /api/leetcode/sync-status/:syncJobId for progress
+ */
+const startDeepSync = asyncHandler(async (req, res, next) => {
+    const userId = req.user.userId;
+
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🚀 START-DEEP-SYNC: Initiating authenticated deep sync`);
+    console.log(`   User: ${userId}`);
+    console.log(`${'='.repeat(70)}\n`);
+
+    try {
+        // Verify user has stored session
+        const user = await User.findById(userId).select(
+            'leetcodeUsername encryptedLeetCodeSession'
+        );
+
+        if (!user) {
+            return next(new AppError('User not found', 404));
+        }
+
+        if (!user.encryptedLeetCodeSession) {
+            return next(new AppError(
+                'No LeetCode session stored. Use POST /api/leetcode/store-session first.',
+                400
+            ));
+        }
+
+        if (!user.leetcodeUsername) {
+            return next(new AppError(
+                'LeetCode username not found. Please store session again.',
+                400
+            ));
+        }
+
+        console.log(`✅ Verified stored session for user: ${user.leetcodeUsername}`);
+
+        // Create SyncJob in pending state
+        const syncJob = await SyncJob.create({
+            userId,
+            username: user.leetcodeUsername.toLowerCase(),
+            status: 'pending',
+            metadata: {
+                syncType: 'authenticated-deep-sync',
+                initiatedAt: new Date(),
+            }
+        });
+
+        console.log(`✅ SyncJob created: ${syncJob._id}`);
+
+        // Spawn background deep sync - do NOT await this
+        // This allows us to return immediately to client
+        deepSyncService.performDeepSync(
+            userId.toString(),
+            user.encryptedLeetCodeSession,
+            syncJob._id.toString()
+        ).catch(error => {
+            // Catch unhandled errors in background task
+            console.error(`❌ Deep sync failed (unhandled):`, error);
+        });
+
+        console.log(`🚀 Background deep sync spawned (not awaited)`);
+        console.log(`✅ Returning syncJobId to client immediately\n`);
+
+        // Return immediately with sync job ID
+        res.status(202).json({
+            success: true,
+            message: 'Deep sync started in background',
+            data: {
+                syncJobId: syncJob._id,
+                username: user.leetcodeUsername,
+                status: syncJob.status,
+                message: 'Deep sync is running. Use GET /api/leetcode/sync-status/:syncJobId to check progress'
+            }
+        });
+
+    } catch (error) {
+        console.error(`❌ Failed to start deep sync:`, error.message);
+        return next(new AppError(`Failed to start deep sync: ${error.message}`, 500));
+    }
+});
+
 export {
+    storeSession,
+    startDeepSync,
     syncLeetCodeProblems,
     syncAcceptedProblems,
+    startBackgroundSync,
+    getSyncStatus,
     getUserProblems,
     getLeetCodeStats
 };
