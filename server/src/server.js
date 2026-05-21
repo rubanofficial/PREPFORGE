@@ -65,9 +65,27 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000
 
-httpServer.listen(PORT, () => {
+const server = httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`)
     console.log(`📡 Socket.io server active`)
 })
+
+// Graceful shutdown handling for nodemon restarts
+const gracefulShutdown = () => {
+    console.log('⚠️  Shutting down gracefully...')
+    server.close(() => {
+        console.log('✅ Server closed')
+        process.exit(0)
+    })
+    
+    // Force exit after 10 seconds if graceful shutdown fails
+    setTimeout(() => {
+        console.error('❌ Forced shutdown after 10 seconds')
+        process.exit(1)
+    }, 10000)
+}
+
+process.on('SIGTERM', gracefulShutdown)
+process.on('SIGINT', gracefulShutdown)
 
 export { app, io }

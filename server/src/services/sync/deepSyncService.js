@@ -386,8 +386,8 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         }
 
         console.log(`✅ User profile verified`);
-        console.log(`   Username: ${profile.username || 'N/A'}`);
-        console.log(`   Real Name: ${profile.realName || 'N/A'}`);
+        console.log(`   Username: ${profile.matchedUser?.username || 'N/A'}`);
+        console.log(`   Real Name: ${profile.matchedUser?.profile?.realName || 'N/A'}`);
 
         // Step 3: Start pagination loop
         let offset = 0;
@@ -412,7 +412,7 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
 
             if (fetchError) {
                 console.error(`❌ Fetch error [${fetchError.type}]:`, fetchError.message);
-                
+
                 // Increment consecutive failure counter
                 consecutiveFailures++;
                 console.warn(`⚠️  Consecutive failures: ${consecutiveFailures}/3`);

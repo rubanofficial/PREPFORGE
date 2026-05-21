@@ -96,7 +96,7 @@ const RETRY_DELAY_MS = 1000;
 async function initializeAuthenticatedConnection(encryptedSession) {
     try {
         // Decrypt the session cookie
-        const sessionCookie = decrypt(encryptedSession);
+        let sessionCookie = decrypt(encryptedSession);
 
         if (!sessionCookie) {
             return {
@@ -109,6 +109,20 @@ async function initializeAuthenticatedConnection(encryptedSession) {
             };
         }
 
+        // Strip LEETCODE_SESSION= prefix if user stored the full cookie string
+        // The library adds this prefix automatically in the cookie header,
+        // so having it in the value causes: LEETCODE_SESSION=LEETCODE_SESSION=eyJ...
+        if (sessionCookie.startsWith('LEETCODE_SESSION=')) {
+            sessionCookie = sessionCookie.substring('LEETCODE_SESSION='.length);
+            console.log(`🔧 Stripped LEETCODE_SESSION= prefix from session cookie`);
+        }
+
+        // Debug: Log sanitized session info (first/last 6 chars only)
+        const sanitized = sessionCookie.length > 12
+            ? `${sessionCookie.substring(0, 6)}...${sessionCookie.substring(sessionCookie.length - 6)}`
+            : '***';
+        console.log(`🔑 Session cookie length: ${sessionCookie.length}, preview: ${sanitized}`);
+
         // Initialize Credential with session cookie
         const credential = new Credential();
 
@@ -117,6 +131,33 @@ async function initializeAuthenticatedConnection(encryptedSession) {
 
         // Create LeetCode client with authenticated credential
         const leetcode = new LeetCode(credential);
+
+        // Verify authentication by calling whoami()
+        // This confirms the session is actually valid before we try submissions
+        try {
+            const whoami = await leetcode.whoami();
+            console.log(`🔐 whoami() response:`);
+            console.log(`   isSignedIn: ${whoami.isSignedIn}`);
+            console.log(`   username: ${whoami.username}`);
+            console.log(`   userId: ${whoami.userId}`);
+
+            if (!whoami.isSignedIn || !whoami.userId) {
+                return {
+                    leetcode: null,
+                    error: {
+                        type: 'SESSION_EXPIRED',
+                        message: `LeetCode session is NOT authenticated (isSignedIn=${whoami.isSignedIn}, userId=${whoami.userId}). Please go to leetcode.com, log in, copy a fresh LEETCODE_SESSION cookie from DevTools > Application > Cookies, and re-save it via the store-session endpoint.`,
+                        recoverable: false,
+                    },
+                };
+            }
+
+            console.log(`✅ Session verified - logged in as: ${whoami.username}`);
+        } catch (whoamiError) {
+            console.error(`⚠️  whoami() failed: ${whoamiError.message}`);
+            // Don't block on whoami failure - try submissions anyway
+            // Some network configs may block this specific query
+        }
 
         return {
             leetcode,
@@ -156,13 +197,39 @@ async function initializeAuthenticatedConnection(encryptedSession) {
  * Batch 3: offset=40, limit=20 → gets 0 items → stop syncing
  */
 /**
+ * GraphQL query for fetching submissions
+ * This is the same query the leetcode-query library uses internally,
+ * but we call it directly to avoid the library's internal crash when
+ * data.submissionList.submissions is null/undefined.
+ */
+const SUBMISSIONS_QUERY = `query ($offset: Int!, $limit: Int!, $slug: String) {
+    submissionList(offset: $offset, limit: $limit, questionSlug: $slug) {
+        hasNext
+        submissions {
+            id
+            lang
+            time
+            timestamp
+            statusDisplay
+            runtime
+            url
+            isPending
+            title
+            memory
+            titleSlug
+        }
+    }
+}`;
+
+/**
  * Fetch submissions with pagination
  * 
- * IMPORTANT: The leetcode-query package may throw an error if:
- * - User has NO submissions (returns null/undefined)
- * - API response format is unexpected
+ * IMPORTANT: We call the GraphQL API directly instead of using
+ * leetcodeClient.submissions() because the library crashes internally
+ * with "data.submissionList.submissions is not iterable" when the API
+ * returns null/undefined for the submissions list.
  * 
- * We wrap with defensive error handling to gracefully handle these cases.
+ * By calling graphql() directly, we get full control over response parsing.
  * 
  * @param {LeetCode} leetcodeClient - Authenticated LeetCode client
  * @param {number} offset - Starting offset (0-indexed)
@@ -171,105 +238,109 @@ async function initializeAuthenticatedConnection(encryptedSession) {
  */
 async function fetchSubmissions(leetcodeClient, offset = 0, limit = BATCH_SIZE) {
     try {
-        console.log(`\n📡 CALLING leetcode.submissions() with offset=${offset}, limit=${limit}`);
+        console.log(`\n📡 CALLING GraphQL submissionList with offset=${offset}, limit=${limit}`);
 
-        // Wrap the submissions() call - it may throw if user has no submissions
-        let submissions;
-        try {
-            submissions = await leetcodeClient.submissions({
+        // Call GraphQL directly to avoid the library's internal crash
+        const response = await leetcodeClient.graphql({
+            variables: {
                 offset,
                 limit,
-            });
-        } catch (submissionError) {
-            console.error(`⚠️  Submissions call threw error: ${submissionError.message}`);
-            
-            // If it's the "not iterable" error, user likely has NO submissions
-            if (submissionError.message.includes('is not iterable')) {
-                console.log(`📭 User has no submissions or submissions list is empty`);
+            },
+            query: SUBMISSIONS_QUERY,
+        });
+
+        console.log(`✅ GraphQL response received`);
+
+        // Check for GraphQL errors
+        if (response.errors && response.errors.length > 0) {
+            const errorMsg = response.errors.map(e => e.message).join('; ');
+            console.error(`❌ GraphQL errors: ${errorMsg}`);
+
+            // Check if it's an auth error
+            const isAuthError = response.errors.some(e =>
+                e.message?.toLowerCase().includes('unauthorized') ||
+                e.message?.toLowerCase().includes('not logged in') ||
+                e.message?.toLowerCase().includes('authentication')
+            );
+
+            if (isAuthError) {
                 return {
                     submissions: [],
                     hasMore: false,
-                    error: null,
+                    error: {
+                        type: 'AUTHENTICATION_FAILED',
+                        message: `LeetCode session expired or invalid: ${errorMsg}`,
+                        recoverable: false,
+                    },
                 };
             }
-            
-            // Re-throw other errors to be caught by outer catch block
-            throw submissionError;
-        }
 
-        console.log(`✅ RAW RESPONSE RECEIVED`);
-        console.log(`   Type: ${typeof submissions}`);
-        console.log(`   Is Array: ${Array.isArray(submissions)}`);
-        
-        if (submissions && typeof submissions === 'object' && !Array.isArray(submissions)) {
-            console.log(`   Keys: ${Object.keys(submissions).join(', ')}`);
-            console.log(`   Constructor: ${submissions.constructor.name}`);
-        }
-
-        // PARSE: Handle different possible response structures
-        let parsedSubmissions = [];
-
-        // Case 1: Response is already an array of submissions
-        if (Array.isArray(submissions)) {
-            console.log(`✅ PARSED: Direct array with ${submissions.length} items`);
-            parsedSubmissions = submissions;
-        }
-        // Case 2: Response is null/undefined (no submissions)
-        else if (!submissions) {
-            console.log(`📭 Response is null/undefined - user has no submissions`);
-            return {
-                submissions: [],
-                hasMore: false,
-                error: null,
-            };
-        }
-        // Case 3: Response is an object with submissionList.submissions
-        else if (
-            typeof submissions === 'object' &&
-            submissions.submissionList &&
-            Array.isArray(submissions.submissionList.submissions)
-        ) {
-            console.log(`✅ PARSED: submissionList.submissions with ${submissions.submissionList.submissions.length} items`);
-            parsedSubmissions = submissions.submissionList.submissions;
-        }
-        // Case 4: Response is an object with submissions property directly
-        else if (
-            typeof submissions === 'object' &&
-            Array.isArray(submissions.submissions)
-        ) {
-            console.log(`✅ PARSED: Direct submissions property with ${submissions.submissions.length} items`);
-            parsedSubmissions = submissions.submissions;
-        }
-        // Case 5: Unknown structure - log and handle gracefully
-        else {
-            console.warn(`⚠️  UNKNOWN RESPONSE STRUCTURE`);
-            console.warn(`   Type: ${typeof submissions}`);
-            console.warn(`   Value:`, JSON.stringify(submissions).substring(0, 200));
-            
-            // Treat as empty
-            return {
-                submissions: [],
-                hasMore: false,
-                error: null,
-            };
-        }
-
-        // VALIDATE: Ensure we have an array
-        if (!Array.isArray(parsedSubmissions)) {
-            console.error(`❌ PARSED SUBMISSIONS NOT AN ARRAY: ${typeof parsedSubmissions}`);
             return {
                 submissions: [],
                 hasMore: false,
                 error: {
-                    type: 'INVALID_RESPONSE_STRUCTURE',
-                    message: 'Failed to extract submissions array',
+                    type: 'GRAPHQL_ERROR',
+                    message: `GraphQL error: ${errorMsg}`,
+                    recoverable: true,
+                },
+            };
+        }
+
+        const data = response.data;
+
+        // Check if data itself is null/undefined
+        if (!data) {
+            console.warn(`⚠️  GraphQL response has no data field`);
+            console.warn(`   Full response keys: ${Object.keys(response).join(', ')}`);
+            return {
+                submissions: [],
+                hasMore: false,
+                error: {
+                    type: 'AUTHENTICATION_FAILED',
+                    message: 'LeetCode returned empty data. Session may be expired.',
                     recoverable: false,
                 },
             };
         }
 
-        // Check if we got any submissions
-        if (parsedSubmissions.length === 0) {
+        // Check if submissionList is null/undefined
+        if (!data.submissionList) {
+            console.warn(`⚠️  data.submissionList is null/undefined`);
+            console.warn(`   data keys: ${Object.keys(data).join(', ')}`);
+            console.warn(`   data.submissionList value: ${data.submissionList}`);
+            return {
+                submissions: [],
+                hasMore: false,
+                error: {
+                    type: 'AUTHENTICATION_FAILED',
+                    message: 'LeetCode returned null submissionList. Session is likely expired or invalid. Please re-authenticate.',
+                    recoverable: false,
+                },
+            };
+        }
+
+        // Debug: Log the entire submissionList structure
+        console.log(`📋 DEBUG submissionList keys: ${Object.keys(data.submissionList).join(', ')}`);
+        console.log(`📋 DEBUG submissionList.hasNext: ${data.submissionList.hasNext}`);
+        console.log(`📋 DEBUG submissionList.submissions type: ${typeof data.submissionList.submissions}`);
+        console.log(`📋 DEBUG submissionList.submissions isArray: ${Array.isArray(data.submissionList.submissions)}`);
+        console.log(`📋 DEBUG submissionList FULL VALUE: ${JSON.stringify(data.submissionList).substring(0, 500)}`);
+
+        // Check if submissions array is null/undefined
+        const rawSubmissions = data.submissionList.submissions;
+        const hasNext = data.submissionList.hasNext || false;
+
+        if (!rawSubmissions || !Array.isArray(rawSubmissions)) {
+            console.warn(`⚠️  submissions is null or not an array: ${typeof rawSubmissions}`);
+            console.warn(`   Value: ${JSON.stringify(rawSubmissions).substring(0, 300)}`);
+            return {
+                submissions: [],
+                hasMore: false,
+                error: null, // Could be genuinely empty
+            };
+        }
+
+        if (rawSubmissions.length === 0) {
             console.log(`📭 No submissions in this batch`);
             return {
                 submissions: [],
@@ -278,15 +349,22 @@ async function fetchSubmissions(leetcodeClient, offset = 0, limit = BATCH_SIZE) 
             };
         }
 
-        console.log(`✅ Successfully parsed ${parsedSubmissions.length} submissions`);
+        // Normalize the submissions (same transforms the library does)
+        const parsedSubmissions = rawSubmissions.map(sub => ({
+            ...sub,
+            id: parseInt(sub.id, 10),
+            timestamp: parseInt(sub.timestamp, 10) * 1000,
+            isPending: sub.isPending !== 'Not Pending',
+            runtime: parseInt(sub.runtime, 10) || 0,
+            memory: parseFloat(sub.memory) || 0,
+        }));
 
-        // If we got fewer than limit items, we've reached the end
-        const hasMore = parsedSubmissions.length === limit;
-        console.log(`   Has more: ${hasMore} (got ${parsedSubmissions.length}/${limit})`);
+        console.log(`✅ Successfully parsed ${parsedSubmissions.length} submissions`);
+        console.log(`   Has more: ${hasNext} (got ${parsedSubmissions.length}/${limit})`);
 
         return {
             submissions: parsedSubmissions,
-            hasMore,
+            hasMore: hasNext,
             error: null,
         };
     } catch (error) {
@@ -400,6 +478,25 @@ async function fetchUserProfile(leetcodeClient, username) {
 
         console.log(`📋 Profile response received`);
         console.log(`   Keys: ${Object.keys(user).join(', ')}`);
+
+        // Validate that matchedUser exists - if null, session may be invalid
+        if (user.matchedUser === null || user.matchedUser === undefined) {
+            console.warn(`⚠️  matchedUser is null - session may be expired or username incorrect`);
+            console.warn(`   Username queried: "${username}"`);
+            console.warn(`   recentSubmissionList: ${user.recentSubmissionList ? user.recentSubmissionList.length + ' items' : 'null'}`);
+
+            // If recentSubmissionList is also empty/null, likely an auth issue
+            if (!user.recentSubmissionList || user.recentSubmissionList.length === 0) {
+                return {
+                    profile: null,
+                    error: {
+                        type: 'AUTHENTICATION_FAILED',
+                        message: `LeetCode returned null profile for "${username}". Your session cookie may be expired. Please go to LeetCode.com, log in again, copy a fresh LEETCODE_SESSION cookie, and re-save it.`,
+                        recoverable: false,
+                    },
+                };
+            }
+        }
 
         return {
             profile: user,

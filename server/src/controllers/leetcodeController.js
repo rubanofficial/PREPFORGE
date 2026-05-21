@@ -693,7 +693,7 @@ const storeSession = asyncHandler(async (req, res, next) => {
         return next(new AppError('LEETCODE_SESSION cookie is required', 400));
     }
 
-    const username = leetcodeUsername.trim().toLowerCase();
+    const username = leetcodeUsername.trim();
 
     if (username.length < 2 || username.length > 50) {
         return next(new AppError('Username must be 2-50 characters', 400));
@@ -711,10 +711,18 @@ const storeSession = asyncHandler(async (req, res, next) => {
     console.log(`${'='.repeat(70)}\n`);
 
     try {
-        // Encrypt the session cookie
-        const encryptedSession = encrypt(leetcodeSessionCookie);
+        // Strip LEETCODE_SESSION= prefix if included
+        // The leetcode-query library adds this prefix back automatically
+        let cleanSession = leetcodeSessionCookie.trim();
+        if (cleanSession.startsWith('LEETCODE_SESSION=')) {
+            cleanSession = cleanSession.substring('LEETCODE_SESSION='.length);
+            console.log(`🔧 Stripped LEETCODE_SESSION= prefix before storing`);
+        }
 
-        console.log(`✅ Session encrypted successfully`);
+        // Encrypt the session cookie
+        const encryptedSession = encrypt(cleanSession);
+
+        console.log(`✅ Session encrypted successfully (length: ${cleanSession.length})`);
 
         // Update user with encrypted session and username
         const updatedUser = await User.findByIdAndUpdate(
@@ -811,7 +819,7 @@ const startDeepSync = asyncHandler(async (req, res, next) => {
         // Create SyncJob in pending state
         const syncJob = await SyncJob.create({
             userId,
-            username: user.leetcodeUsername.toLowerCase(),
+            username: user.leetcodeUsername,
             status: 'pending',
             metadata: {
                 syncType: 'authenticated-deep-sync',

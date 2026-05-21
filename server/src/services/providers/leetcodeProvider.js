@@ -39,7 +39,36 @@ const MAX_RETRIES = 1;
  * 4. NETWORK PROTECTION: Limits payload size to prevent timeouts
  * 5. RESOURCE PROTECTION: Manages memory during processing
  * 
- * Real-world example:
+ * Real-world example:Node.js v22.14.0
+[nodemon] app crashed - waiting for file changes before starting...
+[nodemon] restarting due to changes...
+[nodemon] starting `node src/server.js`
+[nodemon] restarting due to changes...
+[nodemon] starting `node src/server.js`
+MongoDB Connected: localhost
+node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::5000
+    at Server.setupListenHandle [as _listen2] (node:net:1937:16)
+    at listenInCluster (node:net:1994:12)
+    at Server.listen (node:net:2099:7)
+    at file:///D:/WEB/project/PREPFORGE/server/src/server.js:68:12
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1973:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 5000
+}
+
+Node.js v22.14.0
+[nodemon] app crashed - waiting for file changes before starting...
+
  * - A user with 5000+ solved problems would create enormous payloads
  * - Setting upper limit to 3000 ensures:
  *   - API response stays <50MB
