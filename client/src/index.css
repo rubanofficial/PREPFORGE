@@ -2,6 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    --background: #09090b; /* Very dark slate, almost black */
+    --surface: #18181b; /* Slightly lighter surface for cards */
+    --surface-hover: #27272a;
+    --border: #27272a;
+    
+    --text-main: #f4f4f5;
+    --text-muted: #a1a1aa;
+    
+    --primary: #2563eb; /* Clean blue */
+    --primary-hover: #1d4ed8;
+    
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    
+    /* LeetCode specific colors */
+    --leetcode-easy: #00b8a3;
+    --leetcode-medium: #ffc01e;
+    --leetcode-hard: #ff375f;
+  }
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -9,13 +33,16 @@
 }
 
 body {
-    font-family: 'Inter', sans-serif;
-    background-color: #f9fafb;
-    color: #1f2937;
+    font-family: 'Inter', system-ui, sans-serif;
+    background-color: var(--background);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 html {
     scroll-behavior: smooth;
+    color-scheme: dark;
 }
 
 a {
@@ -33,4 +60,23 @@ input,
 textarea,
 select {
     font-family: inherit;
+}
+
+/* Custom scrollbar for webkit */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-hover);
 }
