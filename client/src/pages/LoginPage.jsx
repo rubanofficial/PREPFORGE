@@ -1,178 +1,85 @@
-import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { useDispatch } from 'react-redux'
-import { authStart, authSuccess, authError } from '../features/auth/authSlice'
-import authService from '../services/authService'
+import React, { useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { useNavigate, Link } from 'react-router-dom';
+import { Code2, ArrowRight } from 'lucide-react';
+import { loginStart, loginSuccess, loginFailure } from '../features/auth/authSlice';
 
-function LoginPage() {
-    // Form state
-    const [formData, setFormData] = useState({
-        email: '',
-        password: '',
-    })
-    const [validationErrors, setValidationErrors] = useState({})
+const LoginPage = () => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const dispatch = useDispatch();
+    const navigate = useNavigate();
 
-    // Navigation and Redux
-    const navigate = useNavigate()
-    const dispatch = useDispatch()
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState(null)
-
-    // Handle input change
-    const handleChange = (e) => {
-        const { name, value } = e.target
-        setFormData(prev => ({
-            ...prev,
-            [name]: value
-        }))
-        // Clear validation error for this field
-        if (validationErrors[name]) {
-            setValidationErrors(prev => ({
-                ...prev,
-                [name]: ''
-            }))
-        }
-    }
-
-    // Validate form
-    const validateForm = () => {
-        const errors = {}
-
-        // Email validation
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-        if (!formData.email.trim()) {
-            errors.email = 'Email is required'
-        } else if (!emailRegex.test(formData.email)) {
-            errors.email = 'Invalid email format'
-        }
-
-        // Password validation
-        if (!formData.password) {
-            errors.password = 'Password is required'
-        }
-
-        return errors
-    }
-
-    // Handle login submission
-    const handleSubmit = async (e) => {
-        e.preventDefault()
-
-        // Validate form
-        const errors = validateForm()
-        if (Object.keys(errors).length > 0) {
-            setValidationErrors(errors)
-            return
-        }
-
-        try {
-            setLoading(true)
-            setError(null)
-            dispatch(authStart())
-
-            // Call login API
-            const response = await authService.login({
-                email: formData.email,
-                password: formData.password,
-            })
-
-            // Success - update Redux and navigate to dashboard
-            dispatch(authSuccess({
-                user: response.user,
-                token: response.token,
-            }))
-
-            navigate('/dashboard')
-        } catch (err) {
-            // Error handling
-            const errorMessage = err.message || 'Login failed. Please try again.'
-            setError(errorMessage)
-            dispatch(authError(errorMessage))
-        } finally {
-            setLoading(false)
-        }
-    }
+    const handleLogin = (e) => {
+        e.preventDefault();
+        dispatch(loginStart());
+        
+        // Mock API call
+        setTimeout(() => {
+            dispatch(loginSuccess({
+                user: { username: 'Admin', email },
+                token: 'mock-jwt-token-123'
+            }));
+            navigate('/dashboard');
+        }, 800);
+    };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
-            <div className="w-full max-w-md bg-white rounded-lg shadow-lg p-8">
-                {/* Header */}
-                <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Welcome Back</h1>
-                    <p className="text-gray-600 mt-2">Login to PrepForge Pro</p>
+        <div className="min-h-screen bg-background flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
+            <div className="sm:mx-auto sm:w-full sm:max-w-md">
+                <div className="flex justify-center text-primary mb-4">
+                    <Code2 size={40} />
                 </div>
-
-                {/* Error Message */}
-                {error && (
-                    <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-                        <p className="text-red-700 text-sm">{error}</p>
-                    </div>
-                )}
-
-                {/* Login Form */}
-                <form onSubmit={handleSubmit} className="space-y-5">
-                    {/* Email Field */}
-                    <div>
-                        <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                            Email Address
-                        </label>
-                        <input
-                            type="email"
-                            id="email"
-                            name="email"
-                            value={formData.email}
-                            onChange={handleChange}
-                            className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${validationErrors.email ? 'border-red-500' : 'border-gray-300'
-                                }`}
-                            placeholder="you@example.com"
-                            disabled={loading}
-                        />
-                        {validationErrors.email && (
-                            <p className="text-red-500 text-xs mt-1">{validationErrors.email}</p>
-                        )}
-                    </div>
-
-                    {/* Password Field */}
-                    <div>
-                        <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                            Password
-                        </label>
-                        <input
-                            type="password"
-                            id="password"
-                            name="password"
-                            value={formData.password}
-                            onChange={handleChange}
-                            className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${validationErrors.password ? 'border-red-500' : 'border-gray-300'
-                                }`}
-                            placeholder="••••••"
-                            disabled={loading}
-                        />
-                        {validationErrors.password && (
-                            <p className="text-red-500 text-xs mt-1">{validationErrors.password}</p>
-                        )}
-                    </div>
-
-                    {/* Submit Button */}
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition duration-200"
-                    >
-                        {loading ? 'Logging in...' : 'Login'}
-                    </button>
-                </form>
-
-                {/* Register Link */}
-                <p className="text-center text-gray-600 mt-6">
-                    Don't have an account?{' '}
-                    <Link to="/register" className="text-blue-600 hover:text-blue-700 font-semibold">
-                        Register here
-                    </Link>
+                <h2 className="text-center text-3xl font-extrabold text-textMain tracking-tight">
+                    Sign in to PrepForge <span className="text-primary font-mono text-xl">PRO</span>
+                </h2>
+                <p className="mt-2 text-center text-sm text-textMuted">
+                    Your placement intelligence platform.
                 </p>
             </div>
-        </div>
-    )
-}
 
-export default LoginPage
+            <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+                <div className="bg-surface py-8 px-4 shadow-xl border border-border sm:rounded-lg sm:px-10">
+                    <form className="space-y-6" onSubmit={handleLogin}>
+                        <div>
+                            <label className="block text-sm font-medium text-textMuted mb-1">Email address</label>
+                            <input 
+                                type="email" 
+                                required
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-textMuted mb-1">Password</label>
+                            <input 
+                                type="password" 
+                                required
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors"
+                            />
+                        </div>
+
+                        <div>
+                            <button 
+                                type="submit" 
+                                className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none"
+                            >
+                                Sign in <ArrowRight size={16} />
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <div className="mt-6 text-center text-sm text-textMuted">
+                        Don't have an account? <Link to="/register" className="text-primary hover:text-primaryHover font-medium transition-colors">Register here</Link>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default LoginPage;

@@ -1,80 +1,110 @@
-import { useSelector } from 'react-redux'
+import React from 'react';
+import StatCard from '../components/UI/StatCard';
+import SyncProgressCard from '../components/UI/SyncProgressCard';
+import { Target, CheckCircle, Code, Flame } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-function DashboardPage() {
-    // Get user from Redux store
-    const { user } = useSelector(state => state.auth)
+// Mock data for initial UI scaffolding
+const mockStats = {
+    totalSolved: 342,
+    easy: 125,
+    medium: 180,
+    hard: 37,
+};
 
+const mockActivityData = [
+    { name: 'Mon', problems: 4 },
+    { name: 'Tue', problems: 7 },
+    { name: 'Wed', problems: 2 },
+    { name: 'Thu', problems: 12 },
+    { name: 'Fri', problems: 5 },
+    { name: 'Sat', problems: 8 },
+    { name: 'Sun', problems: 3 },
+];
+
+const DashboardPage = () => {
     return (
-        <div className="space-y-8">
-            {/* Welcome Section */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg shadow-lg p-8 text-white">
-                <h1 className="text-4xl font-bold mb-2">Welcome, {user?.name || 'User'}! 👋</h1>
-                <p className="text-blue-100 text-lg">You're logged in to PrepForge Pro</p>
+        <div className="space-y-6">
+            <header>
+                <h1 className="text-2xl font-bold tracking-tight text-textMain">Dashboard</h1>
+                <p className="text-sm text-textMuted mt-1">Your preparation intelligence overview.</p>
+            </header>
+
+            {/* SECTION 1: User Summary Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard 
+                    title="Total Solved" 
+                    value={mockStats.totalSolved} 
+                    icon={Target} 
+                    trend={12} 
+                />
+                <StatCard 
+                    title="Easy Mastery" 
+                    value={mockStats.easy} 
+                    icon={CheckCircle} 
+                    colorClass="text-leetcodeEasy"
+                />
+                <StatCard 
+                    title="Medium Focus" 
+                    value={mockStats.medium} 
+                    icon={Code} 
+                    colorClass="text-leetcodeMedium"
+                />
+                <StatCard 
+                    title="Hard Challenges" 
+                    value={mockStats.hard} 
+                    icon={Flame} 
+                    colorClass="text-leetcodeHard"
+                />
             </div>
 
-            {/* User Info Card */}
-            <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Your Profile</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="p-4 bg-gray-50 rounded-lg">
-                        <p className="text-sm text-gray-600 font-semibold">Full Name</p>
-                        <p className="text-lg text-gray-900 font-medium mt-1">{user?.name}</p>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* SECTION 4: Analytics Placeholder */}
+                <div className="lg:col-span-2 bg-surface border border-border rounded-lg p-6">
+                    <div className="mb-4">
+                        <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider">Weekly Consistency</h3>
                     </div>
-                    <div className="p-4 bg-gray-50 rounded-lg">
-                        <p className="text-sm text-gray-600 font-semibold">Email Address</p>
-                        <p className="text-lg text-gray-900 font-medium mt-1">{user?.email}</p>
+                    <div className="h-64 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={mockActivityData}>
+                                <defs>
+                                    <linearGradient id="colorProblems" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <Tooltip 
+                                    contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text-main)' }}
+                                    itemStyle={{ color: 'var(--primary)' }}
+                                />
+                                <Area type="monotone" dataKey="problems" stroke="var(--primary)" fillOpacity={1} fill="url(#colorProblems)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
                     </div>
                 </div>
-            </div>
 
-            {/* Features Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Feature 1 */}
-                <div className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition">
-                    <div className="text-4xl mb-4">📊</div>
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">Track Problems</h3>
-                    <p className="text-gray-600 text-sm">Monitor your DSA problem-solving progress</p>
+                {/* SECTION 3: Sync Status Overview */}
+                <div className="lg:col-span-1 space-y-6">
+                    <SyncProgressCard 
+                        status="completed" 
+                        progressPercent={100} 
+                        metadata={{ fetchedFromProvider: 342, insertedToDatabase: 0 }}
+                    />
+                    
+                    {/* SECTION 2: Recent Activity Placeholder */}
+                    <div className="bg-surface border border-border rounded-lg p-6 flex flex-col h-[calc(100%-144px)]">
+                        <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-4">Recent Solved</h3>
+                        <div className="flex-1 flex items-center justify-center text-textMuted text-sm border border-dashed border-border rounded bg-background/50">
+                            No recent activity found.
+                        </div>
+                    </div>
                 </div>
-
-                {/* Feature 2 */}
-                <div className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition">
-                    <div className="text-4xl mb-4">💡</div>
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">Get Insights</h3>
-                    <p className="text-gray-600 text-sm">Analyze your weak topics and gaps</p>
-                </div>
-
-                {/* Feature 3 */}
-                <div className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition">
-                    <div className="text-4xl mb-4">🎯</div>
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">Smart Recommendations</h3>
-                    <p className="text-gray-600 text-sm">Get personalized problem recommendations</p>
-                </div>
-            </div>
-
-            {/* Getting Started Section */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Getting Started</h3>
-                <ul className="space-y-2 text-gray-700">
-                    <li className="flex items-center">
-                        <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mr-3"></span>
-                        Complete your profile information
-                    </li>
-                    <li className="flex items-center">
-                        <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mr-3"></span>
-                        Start tracking DSA problems (coming soon)
-                    </li>
-                    <li className="flex items-center">
-                        <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mr-3"></span>
-                        View your analytics and progress (coming soon)
-                    </li>
-                    <li className="flex items-center">
-                        <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mr-3"></span>
-                        Get personalized recommendations (coming soon)
-                    </li>
-                </ul>
             </div>
         </div>
-    )
-}
+    );
+};
 
-export default DashboardPage
+export default DashboardPage;
