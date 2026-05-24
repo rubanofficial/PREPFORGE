@@ -1,18 +1,37 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Code2, ArrowRight } from 'lucide-react';
+import authService from '../services/authService';
 
 const RegisterPage = () => {
+    const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [passwordConfirm, setPasswordConfirm] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
     const navigate = useNavigate();
 
-    const handleRegister = (e) => {
+    const handleRegister = async (e) => {
         e.preventDefault();
-        // Mock register then redirect to login
-        setTimeout(() => {
-            navigate('/login');
-        }, 500);
+        setError(null);
+        setLoading(true);
+
+        try {
+            const body = { name, email, username, password, passwordConfirm };
+            const res = await authService.register(body);
+
+            if (res && res.success) {
+                navigate('/login');
+            } else {
+                setError(res?.message || 'Registration failed');
+            }
+        } catch (err) {
+            setError(err?.message || err?.error || 'Registration failed');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -32,6 +51,30 @@ const RegisterPage = () => {
             <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
                 <div className="bg-surface py-8 px-4 shadow-xl border border-border sm:rounded-lg sm:px-10">
                     <form className="space-y-6" onSubmit={handleRegister}>
+                        {error && <div className="text-sm text-red-600">{error}</div>}
+
+                        <div>
+                            <label className="block text-sm font-medium text-textMuted mb-1">Full name</label>
+                            <input 
+                                type="text"
+                                required
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-textMuted mb-1">Username</label>
+                            <input 
+                                type="text"
+                                required
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors"
+                            />
+                        </div>
+
                         <div>
                             <label className="block text-sm font-medium text-textMuted mb-1">Email address</label>
                             <input 
@@ -55,11 +98,23 @@ const RegisterPage = () => {
                         </div>
 
                         <div>
+                            <label className="block text-sm font-medium text-textMuted mb-1">Confirm password</label>
+                            <input 
+                                type="password" 
+                                required
+                                value={passwordConfirm}
+                                onChange={(e) => setPasswordConfirm(e.target.value)}
+                                className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors"
+                            />
+                        </div>
+
+                        <div>
                             <button 
                                 type="submit" 
-                                className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none"
+                                disabled={loading}
+                                className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none disabled:opacity-60"
                             >
-                                Register <ArrowRight size={16} />
+                                {loading ? 'Registering...' : 'Register'} <ArrowRight size={16} />
                             </button>
                         </div>
                     </form>
