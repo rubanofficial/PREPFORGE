@@ -1,15 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import StatCard from '../components/UI/StatCard';
 import SyncProgressCard from '../components/UI/SyncProgressCard';
 import { Target, CheckCircle, Code, Flame } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import analyticsService from '../services/analyticsService';
 
-// Mock data for initial UI scaffolding
-const mockStats = {
-    totalSolved: 342,
-    easy: 125,
-    medium: 180,
-    hard: 37,
+const defaultStats = {
+    totalSolved: 0,
+    easy: 0,
+    medium: 0,
+    hard: 0,
 };
 
 const mockActivityData = [
@@ -23,6 +23,36 @@ const mockActivityData = [
 ];
 
 const DashboardPage = () => {
+    const [stats, setStats] = useState(defaultStats);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        const loadStats = async () => {
+            setLoading(true);
+            setError(null);
+
+            try {
+                const response = await analyticsService.getStats();
+                const breakdown = response.data?.difficultyBreakdown || {};
+
+                setStats({
+                    totalSolved: response.data?.totalSolved ?? 0,
+                    easy: breakdown.easy ?? 0,
+                    medium: breakdown.medium ?? 0,
+                    hard: breakdown.hard ?? 0,
+                });
+            } catch (err) {
+                setError(err?.message || 'Failed to load dashboard stats');
+                setStats(defaultStats);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadStats();
+    }, []);
+
     return (
         <div className="space-y-6">
             <header>
@@ -30,29 +60,35 @@ const DashboardPage = () => {
                 <p className="text-sm text-textMuted mt-1">Your preparation intelligence overview.</p>
             </header>
 
+            {error && (
+                <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+                    {error}
+                </div>
+            )}
+
             {/* SECTION 1: User Summary Stats */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard 
                     title="Total Solved" 
-                    value={mockStats.totalSolved} 
+                    value={loading ? '...' : stats.totalSolved} 
                     icon={Target} 
                     trend={12} 
                 />
                 <StatCard 
                     title="Easy Mastery" 
-                    value={mockStats.easy} 
+                    value={loading ? '...' : stats.easy} 
                     icon={CheckCircle} 
                     colorClass="text-leetcodeEasy"
                 />
                 <StatCard 
                     title="Medium Focus" 
-                    value={mockStats.medium} 
+                    value={loading ? '...' : stats.medium} 
                     icon={Code} 
                     colorClass="text-leetcodeMedium"
                 />
                 <StatCard 
                     title="Hard Challenges" 
-                    value={mockStats.hard} 
+                    value={loading ? '...' : stats.hard} 
                     icon={Flame} 
                     colorClass="text-leetcodeHard"
                 />
