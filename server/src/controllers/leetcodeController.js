@@ -699,11 +699,6 @@ const storeSession = asyncHandler(async (req, res, next) => {
         return next(new AppError('Username must be 2-50 characters', 400));
     }
 
-    // Validate that cookie looks like a real session cookie
-    if (!leetcodeSessionCookie.includes('=') || leetcodeSessionCookie.length < 20) {
-        return next(new AppError('Invalid session cookie format', 400));
-    }
-
     console.log(`\n${'='.repeat(70)}`);
     console.log(`🔐 STORE-SESSION: Encrypting and storing session`);
     console.log(`   User: ${userId}`);
@@ -711,12 +706,16 @@ const storeSession = asyncHandler(async (req, res, next) => {
     console.log(`${'='.repeat(70)}\n`);
 
     try {
-        // Strip LEETCODE_SESSION= prefix if included
-        // The leetcode-query library adds this prefix back automatically
+        // Normalize session value
         let cleanSession = leetcodeSessionCookie.trim();
         if (cleanSession.startsWith('LEETCODE_SESSION=')) {
             cleanSession = cleanSession.substring('LEETCODE_SESSION='.length);
             console.log(`🔧 Stripped LEETCODE_SESSION= prefix before storing`);
+        }
+
+        // Basic validation of normalized session
+        if (!cleanSession || cleanSession.length < 20) {
+            return next(new AppError('Invalid session cookie format', 400));
         }
 
         // Encrypt the session cookie

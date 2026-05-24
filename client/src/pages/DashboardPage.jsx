@@ -68,28 +68,28 @@ const DashboardPage = () => {
 
             {/* SECTION 1: User Summary Stats */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard 
-                    title="Total Solved" 
-                    value={loading ? '...' : stats.totalSolved} 
-                    icon={Target} 
-                    trend={12} 
+                <StatCard
+                    title="Total Solved"
+                    value={loading ? '...' : stats.totalSolved}
+                    icon={Target}
+                    trend={12}
                 />
-                <StatCard 
-                    title="Easy Mastery" 
-                    value={loading ? '...' : stats.easy} 
-                    icon={CheckCircle} 
+                <StatCard
+                    title="Easy Mastery"
+                    value={loading ? '...' : stats.easy}
+                    icon={CheckCircle}
                     colorClass="text-leetcodeEasy"
                 />
-                <StatCard 
-                    title="Medium Focus" 
-                    value={loading ? '...' : stats.medium} 
-                    icon={Code} 
+                <StatCard
+                    title="Medium Focus"
+                    value={loading ? '...' : stats.medium}
+                    icon={Code}
                     colorClass="text-leetcodeMedium"
                 />
-                <StatCard 
-                    title="Hard Challenges" 
-                    value={loading ? '...' : stats.hard} 
-                    icon={Flame} 
+                <StatCard
+                    title="Hard Challenges"
+                    value={loading ? '...' : stats.hard}
+                    icon={Flame}
                     colorClass="text-leetcodeHard"
                 />
             </div>
@@ -105,14 +105,14 @@ const DashboardPage = () => {
                             <AreaChart data={mockActivityData}>
                                 <defs>
                                     <linearGradient id="colorProblems" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3}/>
-                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
+                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                                     </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                                 <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
                                 <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                                <Tooltip 
+                                <Tooltip
                                     contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text-main)' }}
                                     itemStyle={{ color: 'var(--primary)' }}
                                 />
@@ -124,12 +124,12 @@ const DashboardPage = () => {
 
                 {/* SECTION 3: Sync Status Overview */}
                 <div className="lg:col-span-1 space-y-6">
-                    <SyncProgressCard 
-                        status="completed" 
-                        progressPercent={100} 
+                    <SyncProgressCard
+                        status="completed"
+                        progressPercent={100}
                         metadata={{ fetchedFromProvider: 342, insertedToDatabase: 0 }}
                     />
-                    
+
                     {/* SECTION 2: Recent Activity Placeholder */}
                     <div className="bg-surface border border-border rounded-lg p-6 flex flex-col h-[calc(100%-144px)]">
                         <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-4">Recent Solved</h3>

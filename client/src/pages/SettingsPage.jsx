@@ -1,13 +1,34 @@
 import React, { useState } from 'react';
 import { Save, Key } from 'lucide-react';
+import leetcodeService from '../services/leetcodeService';
 
 const SettingsPage = () => {
     const [username, setUsername] = useState('S_RUBAN');
     const [sessionCookie, setSessionCookie] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState(null);
+    const [error, setError] = useState(null);
 
-    const handleSave = (e) => {
+    const handleSave = async (e) => {
         e.preventDefault();
-        // Setup API call to save session
+        setLoading(true);
+        setMessage(null);
+        setError(null);
+
+        try {
+            const body = { leetcodeUsername: username, leetcodeSessionCookie: sessionCookie };
+            const res = await leetcodeService.storeSession(body);
+            if (res && res.success) {
+                setMessage(res.message || 'Session stored successfully');
+                setSessionCookie('');
+            } else {
+                setError(res?.message || 'Failed to store session');
+            }
+        } catch (err) {
+            setError(err?.message || 'Failed to store session');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -22,22 +43,24 @@ const SettingsPage = () => {
                     <Key size={18} className="text-primary" />
                     LeetCode Integration
                 </h2>
-                
+
                 <form onSubmit={handleSave} className="space-y-5">
+                    {message && <div className="text-sm text-success mb-2">{message}</div>}
+                    {error && <div className="text-sm text-danger mb-2">{error}</div>}
                     <div>
                         <label className="block text-sm font-medium text-textMuted mb-1">LeetCode Username</label>
-                        <input 
-                            type="text" 
+                        <input
+                            type="text"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             placeholder="e.g. S_RUBAN"
                             className="w-full bg-background border border-border rounded-md px-4 py-2 text-sm text-textMain focus:outline-none focus:border-primary transition-colors font-mono"
                         />
                     </div>
-                    
+
                     <div>
                         <label className="block text-sm font-medium text-textMuted mb-1">LEETCODE_SESSION Cookie (JWT)</label>
-                        <textarea 
+                        <textarea
                             value={sessionCookie}
                             onChange={(e) => setSessionCookie(e.target.value)}
                             placeholder="eyJhbGciOiJIUzI1NiIs..."
@@ -50,12 +73,13 @@ const SettingsPage = () => {
                     </div>
 
                     <div className="pt-2">
-                        <button 
+                        <button
                             type="submit"
-                            className="flex items-center gap-2 bg-primary hover:bg-primaryHover text-white px-4 py-2 rounded-md font-medium text-sm transition-colors shadow-sm"
+                            disabled={loading}
+                            className="flex items-center gap-2 bg-primary hover:bg-primaryHover text-white px-4 py-2 rounded-md font-medium text-sm transition-colors shadow-sm disabled:opacity-60"
                         >
                             <Save size={16} />
-                            Save Credentials
+                            {loading ? 'Saving...' : 'Save Credentials'}
                         </button>
                     </div>
                 </form>
