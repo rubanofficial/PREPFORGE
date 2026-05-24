@@ -3,6 +3,7 @@ import { useDispatch } from 'react-redux';
 import { useNavigate, Link } from 'react-router-dom';
 import { Code2, ArrowRight } from 'lucide-react';
 import { loginStart, loginSuccess, loginFailure } from '../features/auth/authSlice';
+import authService from '../services/authService';
 
 const LoginPage = () => {
     const [email, setEmail] = useState('');
@@ -10,18 +11,28 @@ const LoginPage = () => {
     const dispatch = useDispatch();
     const navigate = useNavigate();
 
-    const handleLogin = (e) => {
+    const handleLogin = async (e) => {
         e.preventDefault();
         dispatch(loginStart());
-        
-        // Mock API call
-        setTimeout(() => {
+
+        try {
+            const response = await authService.login({ email, password });
+            const { data } = response;
+
             dispatch(loginSuccess({
-                user: { username: 'Admin', email },
-                token: 'mock-jwt-token-123'
+                user: {
+                    userId: data.userId,
+                    name: data.name,
+                    email: data.email,
+                    username: data.username,
+                },
+                token: data.token,
             }));
+
             navigate('/dashboard');
-        }, 800);
+        } catch (error) {
+            dispatch(loginFailure(error?.message || 'Login failed'));
+        }
     };
 
     return (
@@ -43,8 +54,8 @@ const LoginPage = () => {
                     <form className="space-y-6" onSubmit={handleLogin}>
                         <div>
                             <label className="block text-sm font-medium text-textMuted mb-1">Email address</label>
-                            <input 
-                                type="email" 
+                            <input
+                                type="email"
                                 required
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
@@ -54,8 +65,8 @@ const LoginPage = () => {
 
                         <div>
                             <label className="block text-sm font-medium text-textMuted mb-1">Password</label>
-                            <input 
-                                type="password" 
+                            <input
+                                type="password"
                                 required
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
@@ -64,15 +75,15 @@ const LoginPage = () => {
                         </div>
 
                         <div>
-                            <button 
-                                type="submit" 
+                            <button
+                                type="submit"
                                 className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none"
                             >
                                 Sign in <ArrowRight size={16} />
                             </button>
                         </div>
                     </form>
-                    
+
                     <div className="mt-6 text-center text-sm text-textMuted">
                         Don't have an account? <Link to="/register" className="text-primary hover:text-primaryHover font-medium transition-colors">Register here</Link>
                     </div>

@@ -11,16 +11,18 @@ dotenv.config()
 
 const app = express()
 const httpServer = createServer(app)
+const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : null
+
 const io = new SocketServer(httpServer, {
     cors: {
-        origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+        origin: allowedOrigins || true,
         credentials: true,
     },
 })
 
 // Middleware
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: allowedOrigins || true,
     credentials: true,
 }))
 app.use(express.json())
@@ -70,6 +72,16 @@ const server = httpServer.listen(PORT, () => {
     console.log(`📡 Socket.io server active`)
 })
 
+// Handle server listen errors (e.g., EADDRINUSE) to log and exit
+server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Exiting.`)
+        // Exit so process manager (nodemon) can restart cleanly
+        process.exit(1)
+    }
+    console.error('Server error:', err)
+})
+
 // Graceful shutdown handling for nodemon restarts
 const gracefulShutdown = () => {
     console.log('⚠️  Shutting down gracefully...')
@@ -77,13 +89,23 @@ const gracefulShutdown = () => {
         console.log('✅ Server closed')
         process.exit(0)
     })
-    
+
     // Force exit after 10 seconds if graceful shutdown fails
     setTimeout(() => {
         console.error('❌ Forced shutdown after 10 seconds')
         process.exit(1)
     }, 10000)
 }
+
+// Nodemon sends SIGUSR2 on restart — ensure we close the server first so the
+// port is freed before nodemon spawns the new process. Use once to avoid loops.
+process.once('SIGUSR2', () => {
+    console.log('SIGUSR2 received: nodemon restart requested')
+    server.close(() => {
+        console.log('Server closed for nodemon restart')
+        process.kill(process.pid, 'SIGUSR2')
+    })
+})
 
 process.on('SIGTERM', gracefulShutdown)
 process.on('SIGINT', gracefulShutdown)
