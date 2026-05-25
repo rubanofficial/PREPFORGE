@@ -1,5 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { fetchStats } from '../features/analytics/analyticsSlice';
+import LoadingSpinner from '../components/UI/LoadingSpinner';
 
 const mockTopicData = [
     { subject: 'Array', A: 120, fullMark: 150 },
@@ -18,6 +21,28 @@ const mockDifficultyData = [
 ];
 
 const AnalyticsPage = () => {
+    const dispatch = useDispatch();
+    const { stats, loading, error } = useSelector((s) => s.analytics || {});
+
+    useEffect(() => {
+        dispatch(fetchStats());
+    }, [dispatch]);
+
+    // Map server data to chart-friendly shapes with safe fallbacks
+    const topicData = (stats?.topTopics && stats.topTopics.length)
+        ? stats.topTopics.map(t => ({ subject: t.name, A: t.count, fullMark: Math.max(t.count, 10) }))
+        : [
+            { subject: 'Array', A: 120, fullMark: 150 },
+            { subject: 'String', A: 98, fullMark: 150 },
+            { subject: 'DP', A: 45, fullMark: 150 },
+        ];
+
+    const difficultyData = stats?.difficultyBreakdown
+        ? [{ name: 'All Time', Easy: stats.difficultyBreakdown.easy || 0, Medium: stats.difficultyBreakdown.medium || 0, Hard: stats.difficultyBreakdown.hard || 0 }]
+        : [
+            { name: 'Jan', Easy: 40, Medium: 24, Hard: 4 },
+        ];
+
     return (
         <div className="space-y-6">
             <header>
@@ -25,12 +50,22 @@ const AnalyticsPage = () => {
                 <p className="text-sm text-textMuted mt-1">Deep insights into your learning patterns and mastery.</p>
             </header>
 
+            {loading && (
+                <div className="p-6">
+                    <LoadingSpinner />
+                </div>
+            )}
+
+            {error && (
+                <div className="p-4 bg-red-50 text-red-700 rounded">Error loading analytics: {String(error)}</div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-surface border border-border rounded-lg p-6">
                     <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-6">Topic Mastery Radar</h3>
                     <div className="h-72 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <RadarChart cx="50%" cy="50%" outerRadius="80%" data={mockTopicData}>
+                            <RadarChart cx="50%" cy="50%" outerRadius="80%" data={topicData}>
                                 <PolarGrid stroke="var(--border)" />
                                 <PolarAngleAxis dataKey="subject" tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
                                 <PolarRadiusAxis angle={30} domain={[0, 150]} tick={false} axisLine={false} />
@@ -44,11 +79,11 @@ const AnalyticsPage = () => {
                     <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-6">Difficulty Progression</h3>
                     <div className="h-72 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={mockDifficultyData}>
+                            <BarChart data={difficultyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                                 <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
                                 <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                                <Tooltip 
+                                <Tooltip
                                     contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text-main)' }}
                                 />
                                 <Bar dataKey="Easy" stackId="a" fill="var(--leetcode-easy)" />

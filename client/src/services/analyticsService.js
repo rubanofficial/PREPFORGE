@@ -7,7 +7,8 @@ const ANALYTICS_ENDPOINTS = {
 const analyticsService = {
     async getStats() {
         const response = await apiClient.get(ANALYTICS_ENDPOINTS.STATS)
-        return response.data
+        // Controller returns { success: true, data: { ... } }
+        return response.data && response.data.data ? response.data.data : response.data
     },
 }
 
