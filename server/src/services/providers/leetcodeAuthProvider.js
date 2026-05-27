@@ -143,6 +143,13 @@ const SUBMISSIONS_QUERY = `query ($offset: Int!, $limit: Int!, $slug: String) {
             title
             memory
             titleSlug
+            question {
+                difficulty
+                topics {
+                    slug
+                    name
+                }
+            }
         }
     }
 }`;
@@ -473,12 +480,78 @@ async function fetchUserProfile(leetcodeClient, username) {
 }
 
 /**
+ * Fetch problem details including difficulty
+ * 
+ * @param {LeetCode} leetcodeClient - Authenticated LeetCode client
+ * @param {string} titleSlug - Problem slug (e.g., "two-sum")
+ * @returns {Promise<{problem: Object, error: null} | {problem: null, error: Object}>}
+ */
+async function fetchProblemDetail(leetcodeClient, titleSlug) {
+    const QUESTION_QUERY = `query ($titleSlug: String!) {
+        question(titleSlug: $titleSlug) {
+            difficulty
+            title
+            titleSlug
+            topics {
+                slug
+                name
+            }
+        }
+    }`;
+
+    try {
+        if (!titleSlug || typeof titleSlug !== 'string') {
+            return {
+                problem: null,
+                error: {
+                    type: 'INVALID_SLUG',
+                    message: 'Problem slug is required',
+                    recoverable: false,
+                },
+            };
+        }
+
+        console.log(`🔍 Fetching problem details for slug: "${titleSlug}"`);
+        
+        const result = await leetcodeClient.query(QUESTION_QUERY, { titleSlug });
+        
+        if (!result || !result.question) {
+            console.warn(`⚠️  Problem not found: "${titleSlug}"`);
+            return {
+                problem: null,
+                error: {
+                    type: 'PROBLEM_NOT_FOUND',
+                    message: `Problem not found: ${titleSlug}`,
+                    recoverable: false,
+                },
+            };
+        }
+
+        return {
+            problem: result.question,
+            error: null,
+        };
+    } catch (error) {
+        console.error(`❌ Failed to fetch problem detail for "${titleSlug}":`, error.message);
+        return {
+            problem: null,
+            error: {
+                type: 'FETCH_FAILED',
+                message: `Failed to fetch problem details: ${error.message}`,
+                recoverable: true,
+            },
+        };
+    }
+}
+
+/**
  * Provider interface for authenticated deep sync
  */
 const leetcodeAuthProvider = {
     initializeAuthenticatedConnection,
     fetchSubmissions,
     fetchUserProfile,
+    fetchProblemDetail,
 
     /**
      * Constants exported for sync service

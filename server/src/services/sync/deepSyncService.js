@@ -194,14 +194,14 @@ function normalizeSubmission(submission, userId) {
             problemDoc.language = submission.lang.toLowerCase();
         }
 
-        // Optional: add difficulty if available
-        if (submission.difficulty) {
-            problemDoc.difficulty = submission.difficulty;
+        // Optional: add difficulty if available (from question object)
+        if (submission.question?.difficulty) {
+            problemDoc.difficulty = submission.question.difficulty;
         }
 
-        // Optional: add topics if available
-        if (Array.isArray(submission.topics) && submission.topics.length > 0) {
-            problemDoc.topics = submission.topics.map((t) => t.toLowerCase());
+        // Optional: add topics if available (from question object)
+        if (Array.isArray(submission.question?.topics) && submission.question.topics.length > 0) {
+            problemDoc.topics = submission.question.topics.map((t) => t.slug?.toLowerCase() || t.name?.toLowerCase()).filter(Boolean);
         }
 
         return problemDoc;

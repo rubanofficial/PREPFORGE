@@ -7,7 +7,8 @@ import {
     startBackgroundSync,
     getSyncStatus,
     getUserProblems,
-    getLeetCodeStats
+    getLeetCodeStats,
+    enrichProblems
 } from '../controllers/leetcodeController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -60,5 +61,10 @@ router.get('/problems', protect, getUserProblems);
 // GET /api/leetcode/stats - Get user's problem-solving statistics
 // Protected route: requires authentication
 router.get('/stats', protect, getLeetCodeStats);
+
+// POST /api/leetcode/enrich-problems - Enrich problems with missing difficulty data
+// Protected route: requires authentication
+// Returns 202 Accepted - enrichment runs in background
+router.post('/enrich-problems', protect, enrichProblems);
 
 export default router;

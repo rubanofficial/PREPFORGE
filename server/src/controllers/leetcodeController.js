@@ -6,6 +6,7 @@ import User from '../models/User.js';
 import SyncJob from '../models/SyncJob.js';
 import deepSyncService from '../services/sync/deepSyncService.js';
 import backgroundSyncService from '../services/sync/backgroundSyncService.js';
+import problemEnrichmentService from '../services/enrichment/problemEnrichmentService.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { asyncHandler, AppError } from '../utils/errorHandler.js';
 
@@ -523,6 +524,60 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
     });
 });
 
+/**
+ * POST /api/leetcode/enrich-problems
+ * Enrich existing problems with missing difficulty data
+ * Protected route: requires authentication
+ */
+const enrichProblems = asyncHandler(async (req, res, next) => {
+    const userId = req.user.userId;
+
+    console.log(`🔧 Starting problem enrichment for user: ${userId}`);
+
+    // Get user's encrypted session if available (for authenticated enrichment)
+    const user = await User.findById(userId).select('encryptedLeetCodeSession leetcodeUsername');
+
+    let leetcodeClient = null;
+
+    // If user has saved session, use authenticated client for better data
+    if (user && user.encryptedLeetCodeSession) {
+        try {
+            const { leetcode, error } = await (await import('../services/providers/leetcodeAuthProvider.js')).default.initializeAuthenticatedConnection(
+                user.encryptedLeetCodeSession
+            );
+
+            if (!error && leetcode) {
+                leetcodeClient = leetcode;
+                console.log(`✅ Using authenticated client for enrichment`);
+            }
+        } catch (err) {
+            console.warn(`⚠️  Could not initialize authenticated client, falling back to public API`);
+        }
+    }
+
+    // Run enrichment in background
+    const enrichmentPromise = problemEnrichmentService.enrichUserProblems(userId, leetcodeClient);
+
+    // Return immediately
+    res.status(202).json({
+        success: true,
+        message: 'Problem enrichment started in background',
+        data: {
+            userId,
+            status: 'in_progress'
+        }
+    });
+
+    // Continue enrichment without blocking response
+    enrichmentPromise
+        .then((result) => {
+            console.log(`✅ Enrichment completed:`, result);
+        })
+        .catch((error) => {
+            console.error(`❌ Enrichment failed:`, error.message);
+        });
+});
+
 export {
     storeSession,
     startDeepSync,
@@ -531,5 +586,6 @@ export {
     syncLeetCodeProblems,
     syncAcceptedProblems,
     getUserProblems,
-    getLeetCodeStats
+    getLeetCodeStats,
+    enrichProblems
 };
