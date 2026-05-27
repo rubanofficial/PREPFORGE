@@ -512,9 +512,9 @@ async function fetchProblemDetail(leetcodeClient, titleSlug) {
         }
 
         console.log(`🔍 Fetching problem details for slug: "${titleSlug}"`);
-        
+
         const result = await leetcodeClient.query(QUESTION_QUERY, { titleSlug });
-        
+
         if (!result || !result.question) {
             console.warn(`⚠️  Problem not found: "${titleSlug}"`);
             return {

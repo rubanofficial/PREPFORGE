@@ -63,7 +63,7 @@ async function enrichUserProblems(userId, leetcodeClient = null) {
         // Process in batches
         for (let i = 0; i < problemsToEnrich.length; i += ENRICHMENT_BATCH_SIZE) {
             const batch = problemsToEnrich.slice(i, i + ENRICHMENT_BATCH_SIZE);
-            
+
             console.log(`\n📦 Processing batch ${Math.floor(i / ENRICHMENT_BATCH_SIZE) + 1}/${Math.ceil(problemsToEnrich.length / ENRICHMENT_BATCH_SIZE)}`);
 
             // Enrich problems in parallel
@@ -129,7 +129,7 @@ async function enrichSingleProblem(problem, leetcodeClient = null) {
 
         // Update problem with fetched data
         const updateData = {};
-        
+
         if (problemDetail.difficulty) {
             updateData.difficulty = problemDetail.difficulty;
         }
@@ -167,9 +167,9 @@ async function enrichFromPublicAPI(problem) {
         const response = await axios.get(`https://alfa-leetcode-api.onrender.com/select?titleSlug=${problem.titleSlug}`, {
             timeout: 5000
         });
-        
+
         const data = response.data;
-        
+
         if (data && data.difficulty) {
             await Problem.findByIdAndUpdate(problem._id, {
                 difficulty: data.difficulty,
