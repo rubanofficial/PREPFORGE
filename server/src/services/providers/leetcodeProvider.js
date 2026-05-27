@@ -1,12 +1,37 @@
 import axios from 'axios';
 
+/**
+ * PROVIDER LAYER - Alfa LeetCode API Data Fetching
+ * 
+ * What is a Provider?
+ * A provider is a service that handles external API communication.
+ * It acts as a gateway between your application and third-party services.
+ * 
+ * Why Provider Abstraction?
+ * 1. ISOLATION: If API changes, only this file needs updates
+ * 2. TESTABILITY: Easy to mock for unit tests
+ * 3. CONSISTENCY: Single point of error handling and logging
+ * 4. FLEXIBILITY: Can swap to different provider/endpoint later without changing app
+ * 5. SEPARATION OF CONCERNS: API communication separate from business logic
+ * 
+ * WHY ALFA-LEETCODE-API?
+ * ✅ REST API (no GraphQL schema hell)
+ * ✅ Abstracts LeetCode GraphQL internally
+ * ✅ Simple endpoint for accepted problems
+ * ✅ No schema drift problems
+ * ✅ Lightweight responses
+ * ✅ Reliable and maintained
+ */
+
 const ALFA_LEETCODE_API = 'https://alfa-leetcode-api.onrender.com';
 
-const API_TIMEOUT = 30000;
+// Configuration
+const API_TIMEOUT = 30000; // 30 seconds
 const MAX_RETRIES = 1;
 
-const SAFE_UPPER_LIMIT = 3000;
-
+/**
+ * Axios instance for Alfa LeetCode API
+ */
 function createAxiosInstance() {
   return axios.create({
     baseURL: ALFA_LEETCODE_API,
@@ -17,6 +42,12 @@ function createAxiosInstance() {
   });
 }
 
+/**
+ * Handles common API errors and logs them appropriately
+ * @param {Error} error - Error object from API call
+ * @param {string} operation - What operation failed (for logging)
+ * @returns {Object} Structured error response
+ */
 function handleApiError(error, operation) {
   console.error(`❌ Alfa API Error [${operation}]:`, {
     message: error.message,
@@ -25,6 +56,7 @@ function handleApiError(error, operation) {
     timestamp: new Date().toISOString()
   });
 
+  // Network/Timeout errors
   if (error.code === 'ECONNABORTED') {
     return {
       error: 'TIMEOUT',
@@ -33,6 +65,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // Host not found
   if (error.code === 'ENOTFOUND') {
     return {
       error: 'NETWORK_ERROR',
@@ -41,6 +74,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // User not found
   if (error.response?.status === 404) {
     return {
       error: 'USER_NOT_FOUND',
@@ -49,6 +83,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // Rate limited
   if (error.response?.status === 429) {
     return {
       error: 'RATE_LIMITED',
@@ -57,6 +92,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // Bad request
   if (error.response?.status === 400) {
     return {
       error: 'BAD_REQUEST',
@@ -65,6 +101,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // Generic HTTP error
   if (error.response?.status) {
     return {
       error: 'HTTP_ERROR',
@@ -73,6 +110,7 @@ function handleApiError(error, operation) {
     };
   }
 
+  // Unknown error
   return {
     error: 'API_ERROR',
     message: error.message || 'Unknown API error',
@@ -80,6 +118,11 @@ function handleApiError(error, operation) {
   };
 }
 
+/**
+ * Validates LeetCode username format
+ * @param {string} username - Username to validate
+ * @returns {boolean} True if valid, false otherwise
+ */
 function validateUsername(username) {
   if (!username || typeof username !== 'string') {
     return false;
@@ -87,6 +130,7 @@ function validateUsername(username) {
 
   const trimmed = username.trim();
 
+  // LeetCode usernames: 1-50 chars, alphanumeric + dash/underscore
   if (trimmed.length < 1 || trimmed.length > 50) {
     return false;
   }
@@ -98,9 +142,30 @@ function validateUsername(username) {
   return true;
 }
 
-async function fetchSolvedStats(username) {
-  console.log(`📊 Provider: Fetching solved stats for "${username}"`);
+/**
+ * Fetch accepted (solved) problems for a user
+ * 
+ * Uses Alfa LeetCode API REST endpoint: /:username/acSubmission
+ * 
+ * Returns lightweight problem metadata:
+ * - title: Problem name
+ * - titleSlug: URL slug
+ * - timestamp: When solved (Unix timestamp)
+ * 
+ * WHY LIGHTWEIGHT?
+ * ✅ Avoids timeouts (small payload)
+ * ✅ Prevents performance issues
+ * ✅ Scalable for many users
+ * ✅ No timeout-inducing nested queries
+ * ✅ Only metadata we need (not code, editorials, etc)
+ * 
+ * @param {string} username - LeetCode username
+ * @returns {Object} Raw provider response with accepted problems
+ */
+async function fetchAcceptedProblems(username) {
+  console.log(`🔍 Provider: Fetching accepted problems for "${username}"`);
 
+  // Validate input
   if (!validateUsername(username)) {
     console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
     return {
@@ -112,155 +177,19 @@ async function fetchSolvedStats(username) {
 
   try {
     const client = createAxiosInstance();
-    const endpoint = `/${username.trim()}/solved`;
+    const endpoint = `/${username.trim()}/acSubmission`;
 
     console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
     const response = await client.get(endpoint);
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
-    console.log(`🔎 DEBUG [fetchSolvedStats]: Response structure:`, {
-      type: typeof response.data,
-      keys: Object.keys(response.data || {})
-    });
+    // **CRITICAL DEBUG LOGGING** - Inspect REAL response structure
+    console.log(`🔎 DEBUG: Full response.data type:`, typeof response.data);
+    console.log(`🔎 DEBUG: Full response.data:`, JSON.stringify(response.data, null, 2));
+    console.log(`🔎 DEBUG: response.data keys:`, Object.keys(response.data || {}));
 
-    if (!response.data) {
-      console.warn(`⚠️  Provider: Empty response data for stats "${username}"`);
-      return {
-        error: 'EMPTY_RESPONSE',
-        message: 'API returned empty response',
-        statusCode: 502
-      };
-    }
-
-    let totalSolved = response.data.solvedProblem || response.data.totalSolved || response.data.total || 0;
-
-    const easySolved = response.data.easySolved || 0;
-    const mediumSolved = response.data.mediumSolved || 0;
-    const hardSolved = response.data.hardSolved || 0;
-
-    if (totalSolved === 0 && (easySolved > 0 || mediumSolved > 0 || hardSolved > 0)) {
-      totalSolved = easySolved + mediumSolved + hardSolved;
-      console.log(`✅ Provider: Calculated totalSolved from difficulty breakdown: ${totalSolved}`);
-    }
-
-    if (totalSolved === 0) {
-      console.warn(`⚠️  Provider: User "${username}" has no solved problems`);
-      return {
-        success: true,
-        data: {
-          username: username.trim(),
-          totalSolved: 0,
-          easySolved: easySolved,
-          mediumSolved: mediumSolved,
-          hardSolved: hardSolved,
-          fetchedAt: new Date().toISOString()
-        }
-      };
-    }
-
-    console.log(`✅ Provider: Successfully fetched stats - Total solved: ${totalSolved}`);
-
-    return {
-      success: true,
-      data: {
-        username: username.trim(),
-        totalSolved,
-        easySolved: easySolved,
-        mediumSolved: mediumSolved,
-        hardSolved: hardSolved,
-        fetchedAt: new Date().toISOString()
-      }
-    };
-
-  } catch (error) {
-    const apiError = handleApiError(error, 'fetchSolvedStats');
-    console.error(`❌ Provider: Fetch stats failed for "${username}":`, apiError);
-    return apiError;
-  }
-}
-
-async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
-  console.log(`🔍 Provider: Fetching accepted problems for "${username}" with limit=${limit}, offset=${offset}`);
-
-  if (!validateUsername(username)) {
-    console.warn(`⚠️  Provider: Invalid username format: "${username}"`);
-    return {
-      error: 'INVALID_USERNAME',
-      message: 'Username must be 1-50 characters (alphanumeric, dash, underscore)',
-      statusCode: 400
-    };
-  }
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    console.warn(`⚠️  Provider: Invalid limit: ${limit}`);
-    return {
-      error: 'INVALID_LIMIT',
-      message: 'Limit must be a positive integer',
-      statusCode: 400
-    };
-  }
-
-  if (!Number.isInteger(offset) || offset < 0) {
-    console.warn(`⚠️  Provider: Invalid offset: ${offset}`);
-    return {
-      error: 'INVALID_OFFSET',
-      message: 'Offset must be a non-negative integer',
-      statusCode: 400
-    };
-  }
-
-  const effectiveLimit = Math.min(limit, SAFE_UPPER_LIMIT);
-
-  if (limit > SAFE_UPPER_LIMIT) {
-    console.warn(`⚠️  Provider: Limit ${limit} exceeds safe upper limit ${SAFE_UPPER_LIMIT}, capping to ${effectiveLimit}`);
-  }
-
-  try {
-    const client = createAxiosInstance();
-
-    let endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}&skip=${offset}`;
-    console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
-
-    let response;
-
-    try {
-      response = await client.get(endpoint);
-    } catch (firstError) {
-      if (firstError.response?.status === 404 || firstError.code === 'ERR_BAD_REQUEST') {
-        endpoint = `/${username.trim()}/submission?limit=${effectiveLimit}`;
-        console.log(`⚠️  Provider: Retrying without skip parameter`);
-        console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
-
-        try {
-          response = await client.get(endpoint);
-        } catch (secondError) {
-          endpoint = `/${username.trim()}/acSubmission?limit=${effectiveLimit}&skip=${offset}`;
-          console.log(`⚠️  Provider: Trying /acSubmission endpoint`);
-          console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
-
-          try {
-            response = await client.get(endpoint);
-          } catch (thirdError) {
-            throw thirdError;
-          }
-        }
-      } else {
-        throw firstError;
-      }
-    }
-
-    console.log(`📥 Provider: Response status: ${response.status}`);
-
-    console.log(`🔎 DEBUG [fetchAcceptedProblems]: Response structure:`, {
-      type: typeof response.data,
-      isArray: Array.isArray(response.data),
-      keys: Object.keys(response.data || {}),
-      dataLength: Array.isArray(response.data)
-        ? response.data.length
-        : (response.data?.submissions?.length || 'unknown')
-    });
-
+    // Check if response has data
     if (!response.data) {
       console.warn(`⚠️  Provider: Empty response data for user "${username}"`);
       return {
@@ -270,21 +199,32 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       };
     }
 
+    // Try multiple possible response structures
     let submissionList = null;
 
+    // Structure 1: { submissionList: [...] }
     if (Array.isArray(response.data.submissionList)) {
       console.log(`✅ Provider: Detected structure: { submissionList: [...] }`);
       submissionList = response.data.submissionList;
-    } else if (Array.isArray(response.data.submissions)) {
+    }
+    // Structure 2: { submissions: [...] }
+    else if (Array.isArray(response.data.submissions)) {
       console.log(`✅ Provider: Detected structure: { submissions: [...] }`);
       submissionList = response.data.submissions;
-    } else if (Array.isArray(response.data)) {
+    }
+    // Structure 3: Response IS the array itself
+    else if (Array.isArray(response.data)) {
       console.log(`✅ Provider: Detected structure: response.data is direct array`);
       submissionList = response.data;
-    } else if (Array.isArray(response.data.data)) {
+    }
+    // Structure 4: { data: [...] }
+    else if (Array.isArray(response.data.data)) {
       console.log(`✅ Provider: Detected structure: { data: [...] }`);
       submissionList = response.data.data;
-    } else {
+    }
+    // Structure 5: Check for nested structures under different keys
+    else {
+      // Try to find any array in the response
       for (const [key, value] of Object.entries(response.data)) {
         if (Array.isArray(value)) {
           console.log(`✅ Provider: Found array at key "${key}"`);
@@ -294,6 +234,7 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       }
     }
 
+    // Validate we got an array
     if (!Array.isArray(submissionList)) {
       console.error(`❌ Provider: Could not find array in response`);
       console.error(`   Response structure:`, {
@@ -302,7 +243,6 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
         keys: Object.keys(response.data || {}),
         sample: JSON.stringify(response.data).substring(0, 200)
       });
-
       return {
         error: 'INVALID_FORMAT',
         message: 'API returned unexpected response format (not an array)',
@@ -312,7 +252,6 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
 
     if (submissionList.length === 0) {
       console.warn(`⚠️  Provider: No accepted submissions found for user "${username}"`);
-
       return {
         error: 'NO_SUBMISSIONS',
         message: `User "${username}" has no accepted submissions`,
@@ -320,28 +259,16 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
       };
     }
 
-    if (offset === 0) {
-      console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
-    }
+    // Log sample of first item to understand structure
+    console.log(`📋 Provider: First submission sample:`, JSON.stringify(submissionList[0], null, 2));
 
-    console.log(`📋 Provider: Fetched ${submissionList.length} problems (limit=${effectiveLimit}, offset=${offset})`);
-
-    if (submissionList.length < effectiveLimit) {
-      console.warn(`⚠️  Provider: Received fewer items than requested (${submissionList.length} < ${effectiveLimit})`);
-      console.warn(`   This means: API hit end of results OR has max page size`);
-    }
-
-    console.log(`✅ Provider: Successfully fetched ${submissionList.length} problems`);
+    console.log(`✅ Provider: Successfully fetched ${submissionList.length} accepted problems`);
 
     return {
       success: true,
       data: {
         username: username.trim(),
         submissions: submissionList,
-        count: submissionList.length,
-        limitRequested: limit,
-        limitUsed: effectiveLimit,
-        offsetUsed: offset,
         fetchedAt: new Date().toISOString()
       }
     };
@@ -353,8 +280,33 @@ async function fetchAcceptedProblems(username, limit = 20, offset = 0) {
   }
 }
 
+/**
+ * Export provider functions
+ * 
+ * PROVIDER RESPONSIBILITIES:
+ * ✅ Fetch data from Alfa LeetCode API
+ * ✅ Handle errors and timeouts
+ * ✅ Log API issues (detailed logs)
+ * ✅ Return raw provider data only
+ * ✅ Handle invalid usernames
+ * ✅ Validate API responses
+ * 
+ * NOT PROVIDER RESPONSIBILITIES:
+ * ❌ Normalize data
+ * ❌ Insert into MongoDB
+ * ❌ Calculate analytics
+ * ❌ Validate business logic
+ * ❌ Transform data structure
+ * ❌ Handle duplicates
+ * 
+ * Why keep provider lightweight?
+ * 1. ISOLATION: Easy to replace with GFG/Codeforces provider later
+ * 2. TESTABILITY: Can mock provider responses independently
+ * 3. REUSABILITY: Controller can call provider for multiple purposes
+ * 4. CLARITY: Provider = API calls, Normalization = data transformation
+ * 5. MAINTAINABILITY: If API changes, only update provider
+ */
 export const LeetcodeProvider = {
-  fetchSolvedStats,
   fetchAcceptedProblems,
   validateUsername
 };

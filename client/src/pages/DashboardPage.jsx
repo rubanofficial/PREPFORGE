@@ -134,21 +134,55 @@ const DashboardPage = () => {
                     </div>
                     <div className="h-64 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={activity}>
+                            <AreaChart data={activity} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="colorProblems" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
+                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.4} />
+                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.05} />
                                     </linearGradient>
                                 </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                                <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text-main)' }}
-                                    itemStyle={{ color: 'var(--primary)' }}
+                                <XAxis
+                                    dataKey="name"
+                                    stroke="var(--text-muted)"
+                                    fontSize={12}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    dy={5}
                                 />
-                                <Area type="monotone" dataKey="problems" stroke="var(--primary)" fillOpacity={1} fill="url(#colorProblems)" />
+                                <YAxis
+                                    stroke="var(--text-muted)"
+                                    fontSize={12}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    allowDecimals={false}
+                                    domain={[0, (dataMax) => Math.max(dataMax + 1, 5)]}
+                                />
+                                <Tooltip
+                                    contentStyle={{
+                                        backgroundColor: 'var(--surface)',
+                                        borderColor: 'var(--border)',
+                                        color: 'var(--text-main)',
+                                        borderRadius: '8px',
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                                        padding: '8px 12px',
+                                    }}
+                                    itemStyle={{ color: 'var(--primary)' }}
+                                    labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 500 }}
+                                    cursor={{ stroke: 'var(--primary)', strokeWidth: 1, strokeDasharray: '4 4' }}
+                                />
+                                <Area
+                                    type="monotone"
+                                    dataKey="problems"
+                                    stroke="var(--primary)"
+                                    strokeWidth={2.5}
+                                    fillOpacity={1}
+                                    fill="url(#colorProblems)"
+                                    dot={{ r: 4, fill: 'var(--surface)', stroke: 'var(--primary)', strokeWidth: 2 }}
+                                    activeDot={{ r: 6, fill: 'var(--primary)', stroke: 'var(--surface)', strokeWidth: 2 }}
+                                    animationDuration={800}
+                                    animationEasing="ease-in-out"
+                                />
                             </AreaChart>
                         </ResponsiveContainer>
                     </div>
