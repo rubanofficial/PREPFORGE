@@ -4,6 +4,7 @@ import SyncProgressCard from '../components/UI/SyncProgressCard';
 import { Target, CheckCircle, Code, Flame } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import analyticsService from '../services/analyticsService';
+import problemService from '../services/problemService';
 
 const defaultStats = {
     totalSolved: 0,
@@ -12,45 +13,76 @@ const defaultStats = {
     hard: 0,
 };
 
-const mockActivityData = [
-    { name: 'Mon', problems: 4 },
-    { name: 'Tue', problems: 7 },
-    { name: 'Wed', problems: 2 },
-    { name: 'Thu', problems: 12 },
-    { name: 'Fri', problems: 5 },
-    { name: 'Sat', problems: 8 },
-    { name: 'Sun', problems: 3 },
-];
+const defaultActivity = Array.from({ length: 7 }).map((_, i) => ({ name: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(i + 1) % 7], problems: 0 }));
 
 const DashboardPage = () => {
     const [stats, setStats] = useState(defaultStats);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [activity, setActivity] = useState(defaultActivity);
 
     useEffect(() => {
-        const loadStats = async () => {
+        const loadStatsAndActivity = async () => {
             setLoading(true);
             setError(null);
 
             try {
-                const response = await analyticsService.getStats();
-                const breakdown = response.data?.difficultyBreakdown || {};
+                // Fetch aggregated stats
+                const statsData = await analyticsService.getStats();
+                const breakdown = statsData?.difficultyBreakdown || {};
 
                 setStats({
-                    totalSolved: response.data?.totalSolved ?? 0,
+                    totalSolved: statsData?.totalSolved ?? 0,
                     easy: breakdown.easy ?? 0,
                     medium: breakdown.medium ?? 0,
                     hard: breakdown.hard ?? 0,
                 });
+
+                // Fetch user's problems (get recent history, use large limit)
+                const problemsPayload = await problemService.getProblems({ limit: 1000 });
+                const problems = (problemsPayload && problemsPayload.data) ? problemsPayload.data : [];
+
+                // Build last-7-days buckets (oldest -> newest)
+                const days = [];
+                const labels = [];
+                const now = new Date();
+                for (let i = 6; i >= 0; i--) {
+                    const d = new Date(now);
+                    d.setDate(now.getDate() - i);
+                    days.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+                    labels.push(d.toLocaleDateString(undefined, { weekday: 'short' }));
+                }
+
+                const counts = new Array(7).fill(0);
+                problems.forEach((p) => {
+                    const solved = p.solvedAt ? new Date(p.solvedAt) : null;
+                    if (!solved) return;
+                    for (let i = 0; i < days.length; i++) {
+                        const day = days[i];
+                        if (
+                            solved.getFullYear() === day.getFullYear() &&
+                            solved.getMonth() === day.getMonth() &&
+                            solved.getDate() === day.getDate()
+                        ) {
+                            counts[i]++;
+                            break;
+                        }
+                    }
+                });
+
+                const activityData = labels.map((name, idx) => ({ name, problems: counts[idx] }));
+                setActivity(activityData);
+
             } catch (err) {
-                setError(err?.message || 'Failed to load dashboard stats');
+                setError(err?.response?.data?.message || err?.message || 'Failed to load dashboard');
                 setStats(defaultStats);
+                setActivity(defaultActivity);
             } finally {
                 setLoading(false);
             }
         };
 
-        loadStats();
+        loadStatsAndActivity();
     }, []);
 
     return (
@@ -102,7 +134,7 @@ const DashboardPage = () => {
                     </div>
                     <div className="h-64 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={mockActivityData}>
+                            <AreaChart data={activity}>
                                 <defs>
                                     <linearGradient id="colorProblems" x1="0" y1="0" x2="0" y2="1">
                                         <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />

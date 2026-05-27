@@ -1,6 +1,7 @@
 import { Outlet, Link, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import { logout } from '../features/auth/authSlice'
+import authService from '../services/authService'
 
 function Layout() {
     // Get auth state from Redux
@@ -9,9 +10,13 @@ function Layout() {
     const navigate = useNavigate()
 
     // Handle logout
-    const handleLogout = () => {
-        dispatch(logout())
-        navigate('/')
+    const handleLogout = async () => {
+        try {
+            await authService.logout()
+        } finally {
+            dispatch(logout())
+            navigate('/')
+        }
     }
 
     return (

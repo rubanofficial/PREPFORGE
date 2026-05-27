@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, RefreshCw, Code2, BarChart3, Settings, LogOut } from 'lucide-react';
 import { useDispatch } from 'react-redux';
 import { logout } from '../features/auth/authSlice';
+import authService from '../services/authService';
 import clsx from 'clsx';
 
 const Sidebar = () => {
@@ -16,12 +17,16 @@ const Sidebar = () => {
         { name: 'Settings', path: '/settings', icon: Settings },
     ];
 
-    const handleLogout = () => {
-        dispatch(logout());
+    const handleLogout = async () => {
+        try {
+            await authService.logout();
+        } finally {
+            dispatch(logout());
+        }
     };
 
     return (
-        <aside className="w-64 h-screen bg-surface border-r border-border flex flex-col hidden md:flex sticky top-0">
+        <aside className="w-64 h-screen bg-surface border-r border-border hidden md:flex flex-col sticky top-0">
             <div className="h-16 flex items-center px-6 border-b border-border">
                 <div className="flex items-center gap-2 text-primary">
                     <Code2 size={24} />
