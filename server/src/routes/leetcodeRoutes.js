@@ -8,6 +8,7 @@ import {
     getSyncStatus,
     getUserProblems,
     getLeetCodeStats,
+    getDashboardAnalytics,
     enrichProblems
 } from '../controllers/leetcodeController.js';
 import { protect } from '../middleware/authMiddleware.js';
@@ -61,6 +62,11 @@ router.get('/problems', protect, getUserProblems);
 // GET /api/leetcode/stats - Get user's problem-solving statistics
 // Protected route: requires authentication
 router.get('/stats', protect, getLeetCodeStats);
+
+// GET /api/leetcode/dashboard - Comprehensive dashboard analytics (all metrics)
+// Protected route: requires authentication
+// Returns: overview, difficulty, topics, languages, streak, heatmap
+router.get('/dashboard', protect, getDashboardAnalytics);
 
 // POST /api/leetcode/enrich-problems - Enrich problems with missing difficulty data
 // Protected route: requires authentication

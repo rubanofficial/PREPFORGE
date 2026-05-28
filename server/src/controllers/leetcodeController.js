@@ -7,6 +7,7 @@ import SyncJob from '../models/SyncJob.js';
 import deepSyncService from '../services/sync/deepSyncService.js';
 import backgroundSyncService from '../services/sync/backgroundSyncService.js';
 import problemEnrichmentService from '../services/enrichment/problemEnrichmentService.js';
+import analyticsService from '../services/analyticsService.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { asyncHandler, AppError } from '../utils/errorHandler.js';
 
@@ -471,56 +472,56 @@ const getUserProblems = asyncHandler(async (req, res, next) => {
 /**
  * GET /api/leetcode/stats
  * Get problem-solving statistics for user
+ * 
+ * IMPORTANT: The Problem collection stores ONLY unique accepted problems.
+ * Each problem (titleSlug) appears exactly once per user.
+ * So countDocuments = unique accepted problems, NOT total submissions.
+ * 
+ * Returns:
+ *   - uniqueAcceptedProblems: count of distinct solved problems
+ *   - difficultyBreakdown: { easy, medium, hard, unknown }
+ *   - topTopics: [{ name, count }]  (top 20)
+ *   - languages: [{ name, count }]  (top 10)
+ *   - recentProblems: last 10 solved
  */
 const getLeetCodeStats = asyncHandler(async (req, res) => {
     const userId = req.user.userId;
 
-    // Get difficulty breakdown
-    const difficultyStats = await Problem.aggregate([
-        { $match: { userId } },
-        {
-            $group: {
-                _id: '$difficulty',
-                count: { $sum: 1 }
-            }
-        },
-        { $sort: { _id: 1 } }
-    ]);
-
-    // Get top topics
-    const topicStats = await Problem.aggregate([
-        { $match: { userId } },
-        { $unwind: '$topics' },
-        {
-            $group: {
-                _id: '$topics',
-                count: { $sum: 1 }
-            }
-        },
-        { $sort: { count: -1 } },
-        { $limit: 10 }
-    ]);
-
-    // Get total count
-    const totalSolved = await Problem.countDocuments({ userId });
-
-    // Build breakdown object
-    const breakdown = { easy: 0, medium: 0, hard: 0, null: 0 };
-    difficultyStats.forEach(stat => {
-        const key = stat._id ? stat._id.toLowerCase() : 'null';
-        if (key in breakdown) breakdown[key] = stat.count;
-    });
+    const stats = await analyticsService.getDashboardStats(userId);
 
     res.status(200).json({
         success: true,
         data: {
-            totalSolved,
-            difficultyBreakdown: breakdown,
-            topTopics: topicStats.map(t => ({
-                name: t._id,
-                count: t.count
-            }))
+            uniqueAcceptedProblems: stats.uniqueAcceptedProblems,
+            difficultyBreakdown: stats.difficultyBreakdown,
+            topTopics: stats.topTopics,
+            languages: stats.languages,
+            recentProblems: stats.recentProblems,
         }
+    });
+});
+
+/**
+ * GET /api/leetcode/dashboard
+ * Comprehensive dashboard analytics — all metrics in one call.
+ * 
+ * Returns:
+ *   - overview: unique accepted count + difficulty counts
+ *   - difficultyBreakdown: { easy, medium, hard, unknown }
+ *   - topTopics: [{ name, count }]
+ *   - languages: [{ name, count }]
+ *   - recentProblems: last 10 solved
+ *   - streak: { currentStreak, longestStreak, lastActiveDate, totalActiveDays }
+ *   - heatmap: [{ date, count }]  (last 365 days)
+ */
+const getDashboardAnalytics = asyncHandler(async (req, res) => {
+    const userId = req.user.userId;
+
+    const dashboard = await analyticsService.getFullDashboard(userId);
+
+    res.status(200).json({
+        success: true,
+        data: dashboard
     });
 });
 
@@ -587,5 +588,6 @@ export {
     syncAcceptedProblems,
     getUserProblems,
     getLeetCodeStats,
+    getDashboardAnalytics,
     enrichProblems
 };
