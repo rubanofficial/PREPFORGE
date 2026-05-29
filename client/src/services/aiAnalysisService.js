@@ -8,17 +8,23 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
  * 
  * Returns:
  * {
- *   analysis: {
- *     strengths: [],        // User's strong areas
- *     weaknesses: [],       // Areas to improve
- *     focusAreas: [],       // Recommended topics
- *     actionPlan: []        // Specific steps to improve
- *   },
- *   metrics: {
- *     totalProblems,
- *     difficulty: { easy, medium, hard, unknown },
- *     topicsCount,
- *     languagesUsed
+ *   success: boolean,
+ *   data: {
+ *     readinessScore: number,
+ *     strengths: string[],
+ *     weaknesses: string[],
+ *     weeklyFocus: string[],
+ *     aiInsight: string,
+ *     recommendedProblems: Array<{ title: string, reason: string }>,
+ *     metrics: {
+ *       totalSolved,
+ *       easySolved,
+ *       mediumSolved,
+ *       hardSolved,
+ *       consistencyScore,
+ *       topicsCovered
+ *     },
+ *     timestamp: string
  *   }
  * }
  */

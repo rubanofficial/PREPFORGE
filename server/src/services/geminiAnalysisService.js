@@ -1,8 +1,17 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import Problem from '../models/Problem.js';
 import mongoose from 'mongoose';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Lazy-init: dotenv.config() in server.js runs AFTER ES module imports,
+// so process.env.GEMINI_API_KEY is undefined at import time.
+// We create the client on first use when the env is guaranteed to be loaded.
+let _ai = null;
+function getAI() {
+    if (!_ai) {
+        _ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    }
+    return _ai;
+}
 
 /**
  * Convert userId string to ObjectId for aggregation $match
@@ -25,121 +34,68 @@ async function getUserPerformanceData(userId) {
         return null;
     }
 
-    // Aggregate statistics using MongoDB
-    const [stats] = await Problem.aggregate([
-        { $match: { userId: uid } },
-        {
-            $facet: {
-                totalCount: [{ $count: 'count' }],
-                difficultyBreakdown: [
-                    {
-                        $group: {
-                            _id: '$difficulty',
-                            count: { $sum: 1 }
-                        }
-                    }
-                ],
-                topicStats: [
-                    { $unwind: '$topics' },
-                    {
-                        $group: {
-                            _id: '$topics',
-                            count: { $sum: 1 }
-                        }
-                    },
-                    { $sort: { count: -1 } },
-                    { $limit: 20 }
-                ],
-                languageStats: [
-                    { $match: { language: { $ne: null, $ne: '' } } },
-                    {
-                        $group: {
-                            _id: '$language',
-                            count: { $sum: 1 }
-                        }
-                    },
-                    { $sort: { count: -1 } }
-                ],
-                // Time period analysis
-                timeStats: [
-                    {
-                        $group: {
-                            _id: null,
-                            firstProblem: { $min: '$solvedAt' },
-                            lastProblem: { $max: '$solvedAt' },
-                            avgProblemsPerDay: {
-                                $divide: [
-                                    { $sum: 1 },
-                                    {
-                                        $max: [
-                                            {
-                                                $divide: [
-                                                    { $subtract: ['$lastProblem', '$firstProblem'] },
-                                                    86400000 // milliseconds in a day
-                                                ]
-                                            },
-                                            1 // at least 1 day
-                                        ]
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                ]
-            }
-        }
-    ]);
-
-    // Parse difficulty breakdown
-    const difficulty = { easy: 0, medium: 0, hard: 0, unknown: 0 };
-    for (const stat of stats.difficultyBreakdown) {
-        const key = stat._id ? stat._id.toLowerCase() : 'unknown';
-        if (key in difficulty) {
-            difficulty[key] = stat.count;
-        } else {
-            difficulty.unknown += stat.count;
-        }
-    }
-
-    // Parse topic stats
-    const topTopics = stats.topicStats.map(t => ({
-        name: t._id,
-        count: t.count
-    }));
-
-    // Parse language stats
-    const languages = stats.languageStats.map(l => ({
-        name: l._id,
-        count: l.count
-    }));
-
-    // Identify weak and strong topics
-    const allTopics = {};
+    // Easy, Medium, Hard breakdown
+    let easySolved = 0;
+    let mediumSolved = 0;
+    let hardSolved = 0;
+    
+    // Track topic counts
+    const topicCounts = {};
     problems.forEach(p => {
-        p.topics?.forEach(topic => {
-            allTopics[topic] = (allTopics[topic] || 0) + 1;
+        const diff = p.difficulty?.toLowerCase();
+        if (diff === 'easy') easySolved++;
+        else if (diff === 'medium') mediumSolved++;
+        else if (diff === 'hard') hardSolved++;
+        
+        p.topics?.forEach(t => {
+            if (t) {
+                // Capitalize topic name for consistency
+                const formattedTopic = t.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                topicCounts[formattedTopic] = (topicCounts[formattedTopic] || 0) + 1;
+            }
         });
     });
 
-    // Sort topics by frequency
-    const topicsSorted = Object.entries(allTopics)
-        .map(([name, count]) => ({ name, count }))
-        .sort((a, b) => b.count - a.count);
+    const totalSolved = problems.length;
+
+    // Strong topics: top 3 most solved topics
+    const sortedTopics = Object.entries(topicCounts)
+        .sort((a, b) => b[1] - a[1]);
+    
+    const strongTopics = sortedTopics.slice(0, 3).map(([name]) => name);
+    
+    // Core LeetCode topics to check for weak areas if the user hasn't solved much
+    const coreTopics = ['Array', 'String', 'Hash Table', 'Dynamic Programming', 'Graph', 'Tree', 'Two Pointers', 'Binary Search', 'Stack', 'Queue', 'Heap (Priority Queue)'];
+    const weakTopics = coreTopics
+        .filter(t => !strongTopics.includes(t))
+        .map(t => ({ name: t, count: topicCounts[t] || 0 }))
+        .sort((a, b) => a.count - b.count)
+        .slice(0, 3)
+        .map(t => t.name);
+
+    // Consistency score: active days in last 30 days (target: 12 days for 100%)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const activeDaysCount = new Set(
+        problems
+            .filter(p => p.solvedAt && new Date(p.solvedAt) >= thirtyDaysAgo)
+            .map(p => new Date(p.solvedAt).toDateString())
+    ).size;
+    const consistencyScore = Math.min(100, Math.round((activeDaysCount / 12) * 100)) || 0;
+
+    const topicsCovered = Object.keys(topicCounts).length;
+    const recentProblems = problems.slice(0, 5).map(p => `${p.title} (${p.difficulty || 'Medium'})`);
 
     return {
-        totalProblems: stats.totalCount[0]?.count || 0,
-        difficulty,
-        topTopics,
-        languages,
-        allTopics: topicsSorted,
-        problemsList: problems.map(p => ({
-            title: p.title,
-            difficulty: p.difficulty,
-            topics: p.topics,
-            language: p.language,
-            solvedAt: p.solvedAt
-        })),
-        timeStats: stats.timeStats[0] || {}
+        totalSolved,
+        easySolved,
+        mediumSolved,
+        hardSolved,
+        strongTopics,
+        weakTopics,
+        consistencyScore,
+        topicsCovered,
+        recentProblems
     };
 }
 
@@ -159,47 +115,42 @@ async function analyzeUserPerformance(userId) {
         }
 
         // Prepare data summary for the prompt
-        const dataSummary = `
+        const prompt = `You are a LeetCode performance analytics engine.
+Analyze this user's LeetCode performance data and generate insights.
+
 User Performance Data:
-- Total Problems Solved: ${performanceData.totalProblems}
-- Difficulty Breakdown: Easy (${performanceData.difficulty.easy}), Medium (${performanceData.difficulty.medium}), Hard (${performanceData.difficulty.hard}), Unknown (${performanceData.difficulty.unknown})
-- Top 10 Topics: ${performanceData.topTopics.slice(0, 10).map(t => `${t.name} (${t.count})`).join(', ')}
-- Languages Used: ${performanceData.languages.map(l => `${l.name} (${l.count})`).join(', ')}
-- All Topics Covered (${performanceData.allTopics.length}): ${performanceData.allTopics.slice(0, 20).map(t => t.name).join(', ')}${performanceData.allTopics.length > 20 ? '...' : ''}
-- Recent Problems (Last 5): ${performanceData.problemsList.slice(0, 5).map(p => `${p.title} (${p.difficulty})`).join(', ')}
+${JSON.stringify(performanceData, null, 2)}
+
+You must return a valid JSON object matching this schema:
+{
+  "readinessScore": number (0-100),
+  "strengths": string[] (Exactly 3 strengths. Keep them short, max 3 words each, capitalized. e.g. "Dynamic Programming", "Array Problems"),
+  "weaknesses": string[] (Exactly 3 weaknesses. Keep them short, max 3 words each, capitalized. e.g. "Hard Problems", "Graph Traversal"),
+  "weeklyFocus": string[] (Exactly 3 concrete actionable goals for this week, max 10 words each),
+  "aiInsight": string (A concise summary of their current standing, exactly 1-2 sentences, max 40 words),
+  "recommendedProblems": [
+    {
+      "title": string (Exact name of a LeetCode problem),
+      "reason": string (Short reason why they should solve it, max 10 words)
+    }
+  ] (Recommend exactly 2-3 standard LeetCode problems aligned with their weaknesses/weekly focus)
+}
+
+CRITICAL RULES:
+1. Do NOT include any markdown code blocks (e.g. \`\`\`json ... \`\`\`), HTML tags, or extra text. Return ONLY the JSON object.
+2. Ensure the JSON is perfectly formatted and parsable.
+3. The readinessScore should be a calculated estimate based on totalSolved, consistencyScore, difficulty breakdown, and weak topics. A user with fewer than 50 solved problems or low consistency should not have a score above 50.
 `;
 
-        // Create the AI prompt
-        const prompt = `You are an expert coding interview coach analyzing a LeetCode user's performance data. Based on the following problem-solving statistics, provide a detailed performance analysis.
-
-${dataSummary}
-
-Please analyze and provide:
-
-1. **STRENGTHS** (2-3 bullet points):
-   - Identify areas where the user excels based on their solved problems
-   - Look at difficulty distribution, topic coverage, and consistency
-   
-2. **WEAKNESSES** (2-3 bullet points):
-   - Identify gaps in problem-solving approach
-   - Highlight underrepresented topics or difficulty levels
-   - Suggest areas needing improvement
-   
-3. **RECOMMENDED FOCUS AREAS** (3-4 specific topics/difficulties):
-   - Based on interview preparation best practices
-   - Consider balance and progression
-
-4. **ACTION PLAN** (3-4 specific steps):
-   - Concrete steps to improve weak areas
-   - Realistic timeline and milestones
-
-Format the response as clear, actionable insights. Be encouraging but honest about areas for improvement.`;
-
-        // Call Gemini API
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
-        const result = await model.generateContent(prompt);
-        const analysisText = result.response.text();
+        // Call Gemini API using new @google/genai SDK with responseMimeType config
+        const result = await getAI().models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json'
+            }
+        });
+        const analysisText = result.text;
 
         // Parse the analysis into structured format
         const analysis = parseAnalysis(analysisText);
@@ -209,10 +160,12 @@ Format the response as clear, actionable insights. Be encouraging but honest abo
             analysis,
             rawAnalysis: analysisText,
             performanceMetrics: {
-                totalProblems: performanceData.totalProblems,
-                difficulty: performanceData.difficulty,
-                topicsCount: performanceData.allTopics.length,
-                languagesUsed: performanceData.languages.length
+                totalSolved: performanceData.totalSolved,
+                easySolved: performanceData.easySolved,
+                mediumSolved: performanceData.mediumSolved,
+                hardSolved: performanceData.hardSolved,
+                consistencyScore: performanceData.consistencyScore,
+                topicsCovered: performanceData.topicsCovered
             }
         };
     } catch (error) {
@@ -225,35 +178,22 @@ Format the response as clear, actionable insights. Be encouraging but honest abo
  * Parse Gemini analysis into structured sections
  */
 function parseAnalysis(text) {
-    const sections = {
-        strengths: [],
-        weaknesses: [],
-        focusAreas: [],
-        actionPlan: []
-    };
-
-    // Split by sections
-    const strengthsMatch = text.match(/STRENGTHS[^:]*:([\s\S]*?)(?=WEAKNESSES|$)/i);
-    const weaknessesMatch = text.match(/WEAKNESSES[^:]*:([\s\S]*?)(?=RECOMMENDED|ACTION|$)/i);
-    const focusMatch = text.match(/(?:RECOMMENDED\s+)?FOCUS\s+AREAS[^:]*:([\s\S]*?)(?=ACTION|$)/i);
-    const actionMatch = text.match(/ACTION\s+PLAN[^:]*:([\s\S]*?)$/i);
-
-    // Parse bullet points from each section
-    const parseBullets = (text) => {
-        if (!text) return [];
-        return text
-            .split('\n')
-            .filter(line => line.trim().match(/^[-•*•]\s+|^\d+\.\s+/))
-            .map(line => line.replace(/^[-•*•]\s+|^\d+\.\s+/, '').trim())
-            .filter(line => line.length > 0);
-    };
-
-    sections.strengths = parseBullets(strengthsMatch?.[1] || '');
-    sections.weaknesses = parseBullets(weaknessesMatch?.[1] || '');
-    sections.focusAreas = parseBullets(focusMatch?.[1] || '');
-    sections.actionPlan = parseBullets(actionMatch?.[1] || '');
-
-    return sections;
+    try {
+        let cleanText = text.trim();
+        // Strip markdown code blocks if present
+        if (cleanText.startsWith('```json')) {
+            cleanText = cleanText.substring(7);
+        } else if (cleanText.startsWith('```')) {
+            cleanText = cleanText.substring(3);
+        }
+        if (cleanText.endsWith('```')) {
+            cleanText = cleanText.substring(0, cleanText.length - 3);
+        }
+        return JSON.parse(cleanText.trim());
+    } catch (e) {
+        console.error('Failed to parse Gemini response as JSON. Raw response:', text);
+        throw new Error('AI returned an invalid response format. Please try again.');
+    }
 }
 
 export { analyzeUserPerformance, getUserPerformanceData };

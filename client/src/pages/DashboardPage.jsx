@@ -13,7 +13,7 @@ const defaultStats = {
     hard: 0,
 };
 
-const defaultActivity = Array.from({ length: 7 }).map((_, i) => ({ name: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(i + 1) % 7], problems: 0 }));
+const defaultActivity = Array.from({ length: 7 }).map((_, i) => ({ name: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][(i + 1) % 7], problems: 0 }));
 
 const DashboardPage = () => {
     const [stats, setStats] = useState(defaultStats);

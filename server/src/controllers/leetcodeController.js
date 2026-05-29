@@ -616,7 +616,12 @@ const getAIAnalysis = asyncHandler(async (req, res, next) => {
             success: true,
             message: 'AI analysis completed',
             data: {
-                analysis: analysis.analysis,
+                readinessScore: analysis.analysis.readinessScore,
+                strengths: analysis.analysis.strengths,
+                weaknesses: analysis.analysis.weaknesses,
+                weeklyFocus: analysis.analysis.weeklyFocus,
+                aiInsight: analysis.analysis.aiInsight,
+                recommendedProblems: analysis.analysis.recommendedProblems,
                 metrics: analysis.performanceMetrics,
                 timestamp: new Date()
             }
