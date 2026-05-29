@@ -8,6 +8,7 @@ import deepSyncService from '../services/sync/deepSyncService.js';
 import backgroundSyncService from '../services/sync/backgroundSyncService.js';
 import problemEnrichmentService from '../services/enrichment/problemEnrichmentService.js';
 import analyticsService from '../services/analyticsService.js';
+import { analyzeUserPerformance } from '../services/geminiAnalysisService.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { asyncHandler, AppError } from '../utils/errorHandler.js';
 
@@ -579,6 +580,58 @@ const enrichProblems = asyncHandler(async (req, res, next) => {
         });
 });
 
+/**
+ * GET /api/leetcode/ai-analysis
+ * Get AI-powered performance analysis using Gemini
+ * Analyzes user's problem-solving patterns to identify strengths and weaknesses
+ * Protected route: requires authentication
+ * 
+ * Returns:
+ *   - strengths: [bullet points of strong areas]
+ *   - weaknesses: [bullet points of areas to improve]
+ *   - focusAreas: [recommended topics to focus on]
+ *   - actionPlan: [specific steps to improve]
+ *   - performanceMetrics: overview of stats
+ */
+const getAIAnalysis = asyncHandler(async (req, res, next) => {
+    const userId = req.user.userId;
+
+    if (!process.env.GEMINI_API_KEY) {
+        return next(new AppError('Gemini API key not configured. Please set GEMINI_API_KEY in environment variables.', 500));
+    }
+
+    console.log(`🤖 Starting AI analysis for user: ${userId}`);
+
+    try {
+        const analysis = await analyzeUserPerformance(userId);
+
+        if (!analysis.success) {
+            return res.status(200).json({
+                success: false,
+                message: analysis.message
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'AI analysis completed',
+            data: {
+                analysis: analysis.analysis,
+                metrics: analysis.performanceMetrics,
+                timestamp: new Date()
+            }
+        });
+    } catch (error) {
+        console.error(`❌ AI Analysis error:`, error.message);
+
+        if (error.message?.includes('API key')) {
+            return next(new AppError('Gemini API key is invalid or expired', 401));
+        }
+
+        return next(new AppError(`AI Analysis failed: ${error.message}`, 500));
+    }
+});
+
 export {
     storeSession,
     startDeepSync,
@@ -589,5 +642,6 @@ export {
     getUserProblems,
     getLeetCodeStats,
     getDashboardAnalytics,
-    enrichProblems
+    enrichProblems,
+    getAIAnalysis
 };
