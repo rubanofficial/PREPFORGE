@@ -12,6 +12,36 @@ const EMPTY_STATS = {
     topTopics: []
 };
 
+/* ── helper: extract leading percentage from a readiness string like "85% — Ready…" ── */
+const extractPercent = (str) => {
+    if (!str) return 0;
+    const m = str.match(/(\d+)%/);
+    return m ? parseInt(m[1], 10) : 0;
+};
+
+/* ── helper: color classes by rating ─────────────────────────────────── */
+const ratingColor = (r) => {
+    if (r >= 7) return { text: 'text-leetcodeEasy', bg: 'bg-leetcodeEasy', bgFaint: 'bg-leetcodeEasy/15', border: 'border-leetcodeEasy/30' };
+    if (r >= 4) return { text: 'text-leetcodeMedium', bg: 'bg-leetcodeMedium', bgFaint: 'bg-leetcodeMedium/15', border: 'border-leetcodeMedium/30' };
+    return { text: 'text-leetcodeHard', bg: 'bg-leetcodeHard', bgFaint: 'bg-leetcodeHard/15', border: 'border-leetcodeHard/30' };
+};
+
+/* ── helper: difficulty badge classes ────────────────────────────────── */
+const diffBadge = (d) => {
+    const dl = (d || '').toLowerCase();
+    if (dl === 'easy') return 'text-leetcodeEasy bg-leetcodeEasy/10 border-leetcodeEasy/30';
+    if (dl === 'medium') return 'text-leetcodeMedium bg-leetcodeMedium/10 border-leetcodeMedium/30';
+    return 'text-leetcodeHard bg-leetcodeHard/10 border-leetcodeHard/30';
+};
+
+/* ── helper: importance badge ────────────────────────────────────────── */
+const importanceBadge = (imp) => {
+    const il = (imp || '').toLowerCase();
+    if (il === 'high') return 'text-leetcodeHard bg-leetcodeHard/10 border-leetcodeHard/30';
+    if (il === 'medium') return 'text-leetcodeMedium bg-leetcodeMedium/10 border-leetcodeMedium/30';
+    return 'text-leetcodeEasy bg-leetcodeEasy/10 border-leetcodeEasy/30';
+};
+
 const AnalyticsPage = () => {
     const dispatch = useDispatch();
     const navigate = useNavigate();
@@ -21,6 +51,7 @@ const AnalyticsPage = () => {
     const [analysis, setAnalysis] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
     const [aiError, setAiError] = useState(null);
+    const [activeWeek, setActiveWeek] = useState('week1');
 
     const resolvedStats = stats || EMPTY_STATS;
     const hasData = resolvedStats.totalSolved > 0;
@@ -73,6 +104,16 @@ const AnalyticsPage = () => {
             Hard: resolvedStats.difficultyBreakdown.hard || 0
         }
     ];
+
+    // ── Derived data from analysis ─────────────────────────────────────
+    const sortedTopicRatings = analysis?.topicStrengthRatings
+        ? Object.entries(analysis.topicStrengthRatings)
+            .map(([topic, rating]) => ({ topic, rating }))
+            .sort((a, b) => b.rating - a.rating)
+        : [];
+
+    const roadmap = analysis?.placementAssessment?.fourWeekRoadmap || {};
+    const weeks = ['week1', 'week2', 'week3', 'week4'];
 
     return (
         <div className="space-y-6">
@@ -170,11 +211,14 @@ const AnalyticsPage = () => {
                 )}
             </div>
 
+            {/* ════════════════════════════════════════════════════════════════
+                AI PERFORMANCE ANALYSIS — COMPREHENSIVE SECTION
+               ════════════════════════════════════════════════════════════════ */}
             <div className="bg-surface border border-border rounded-lg p-6">
                 <div className="flex items-center justify-between mb-4">
                     <div>
                         <h3 className="text-lg font-bold text-textMain mb-1">🤖 AI Performance Analysis</h3>
-                        <p className="text-xs text-textMuted">Powered by Google Gemini - Personalized insights based on your problem-solving patterns</p>
+                        <p className="text-xs text-textMuted">Powered by Google Gemini — Brutally honest, evidence-based insights</p>
                     </div>
                     <button
                         onClick={fetchAIAnalysis}
@@ -199,86 +243,64 @@ const AnalyticsPage = () => {
 
                 {analysis && (
                     <div className="space-y-6 animate-fadeIn">
-                        {/* HERO CARD: Readiness & Key Metrics */}
+
+                        {/* ─── 1. HERO CARD: Readiness Score + Metrics ─────────── */}
                         <div className="bg-surface border border-border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
                             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-                                {/* Left side: Readiness Score gauge */}
+                                {/* Left: Readiness gauge */}
                                 <div className="md:col-span-5 flex flex-col items-center justify-center text-center border-b md:border-b-0 md:border-r border-border pb-6 md:pb-0 md:pr-6">
                                     <div className="relative flex items-center justify-center">
                                         <svg className="w-36 h-36 transform -rotate-90">
+                                            <circle cx="72" cy="72" r="58" className="stroke-border" strokeWidth="8" fill="transparent" />
                                             <circle
-                                                cx="72"
-                                                cy="72"
-                                                r="58"
-                                                className="stroke-border"
-                                                strokeWidth="8"
-                                                fill="transparent"
-                                            />
-                                            <circle
-                                                cx="72"
-                                                cy="72"
-                                                r="58"
-                                                stroke="var(--primary)"
-                                                strokeWidth="10"
-                                                fill="transparent"
+                                                cx="72" cy="72" r="58"
+                                                stroke="var(--primary)" strokeWidth="10" fill="transparent"
                                                 strokeDasharray={2 * Math.PI * 58}
-                                                strokeDashoffset={2 * Math.PI * 58 - (2 * Math.PI * 58 * (analysis.readinessScore || 0)) / 100}
+                                                strokeDashoffset={2 * Math.PI * 58 - (2 * Math.PI * 58 * (analysis.overallReadinessScore || 0)) / 100}
                                                 strokeLinecap="round"
                                                 className="transition-all duration-1000 ease-out"
                                             />
                                         </svg>
                                         <div className="absolute flex flex-col items-center">
                                             <span className="text-4xl font-extrabold text-textMain tracking-tight">
-                                                {analysis.readinessScore || 0}%
+                                                {analysis.overallReadinessScore || 0}%
                                             </span>
                                             <span className="text-[10px] text-textMuted uppercase font-bold tracking-wider mt-0.5">Readiness</span>
                                         </div>
                                     </div>
                                     <div className="mt-4">
                                         <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border ${
-                                            (analysis.readinessScore || 0) < 50 
-                                                ? 'text-leetcodeHard bg-leetcodeHard/10 border-leetcodeHard/20' 
-                                                : (analysis.readinessScore || 0) < 75 
-                                                    ? 'text-leetcodeMedium bg-leetcodeMedium/10 border-leetcodeMedium/20' 
+                                            (analysis.overallReadinessScore || 0) < 50
+                                                ? 'text-leetcodeHard bg-leetcodeHard/10 border-leetcodeHard/20'
+                                                : (analysis.overallReadinessScore || 0) < 75
+                                                    ? 'text-leetcodeMedium bg-leetcodeMedium/10 border-leetcodeMedium/20'
                                                     : 'text-leetcodeEasy bg-leetcodeEasy/10 border-leetcodeEasy/20'
                                         }`}>
-                                            {(analysis.readinessScore || 0) < 50 
-                                                ? 'Needs Practice' 
-                                                : (analysis.readinessScore || 0) < 75 
-                                                    ? 'Getting Ready' 
+                                            {(analysis.overallReadinessScore || 0) < 50
+                                                ? 'Needs Practice'
+                                                : (analysis.overallReadinessScore || 0) < 75
+                                                    ? 'Getting Ready'
                                                     : 'Interview Ready'}
                                         </span>
-                                        <p className="text-xs text-textMuted mt-2 max-w-[240px]">
-                                            Estimated likelihood of clearing a technical interview based on current performance.
-                                        </p>
                                     </div>
                                 </div>
 
-                                {/* Right side: Key Metrics Grid */}
+                                {/* Right: Key Metrics */}
                                 <div className="md:col-span-7 space-y-4">
                                     <h4 className="text-xs font-bold text-textMuted uppercase tracking-wider">Analysis Metrics</h4>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="bg-background border border-border rounded-lg p-3">
                                             <div className="text-[10px] text-textMuted uppercase font-bold tracking-wider">Consistency Score</div>
-                                            <div className="text-xl font-bold text-primary mt-1">
-                                                {analysis.metrics?.consistencyScore || 0}%
-                                            </div>
+                                            <div className="text-xl font-bold text-primary mt-1">{analysis.metrics?.consistencyScore || 0}%</div>
                                             <div className="w-full bg-border rounded-full h-1.5 mt-2 overflow-hidden">
-                                                <div 
-                                                    className="bg-primary h-1.5 rounded-full transition-all duration-1000" 
-                                                    style={{ width: `${analysis.metrics?.consistencyScore || 0}%` }}
-                                                />
+                                                <div className="bg-primary h-1.5 rounded-full transition-all duration-1000" style={{ width: `${analysis.metrics?.consistencyScore || 0}%` }} />
                                             </div>
                                         </div>
-
                                         <div className="bg-background border border-border rounded-lg p-3">
-                                            <div className="text-[10px] text-textMuted uppercase font-bold tracking-wider">Topics Covered</div>
-                                            <div className="text-xl font-bold text-textMain mt-1">
-                                                {analysis.metrics?.topicsCovered || 0}
-                                            </div>
-                                            <div className="text-xs text-textMuted mt-1">unique concepts</div>
+                                            <div className="text-[10px] text-textMuted uppercase font-bold tracking-wider">Weighted Score</div>
+                                            <div className="text-xl font-bold text-textMain mt-1">{analysis.metrics?.weightedScore || 0}</div>
+                                            <div className="text-xs text-textMuted mt-1">E×1 + M×2 + H×3</div>
                                         </div>
-
                                         <div className="bg-background border border-border rounded-lg p-3 col-span-2">
                                             <div className="text-[10px] text-textMuted uppercase font-bold tracking-wider mb-1.5">Problem Mix</div>
                                             <div className="flex items-center gap-4 text-xs font-semibold">
@@ -301,21 +323,53 @@ const AnalyticsPage = () => {
                             </div>
                         </div>
 
-                        {/* 2x2 GRID FOR DETAILS */}
+                        {/* ─── 2. TOPIC STRENGTH RATINGS (0-10 bars) ──────────── */}
+                        {sortedTopicRatings.length > 0 && (
+                            <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                <h4 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
+                                    <span className="text-base">📊</span> Topic Strength Ratings
+                                </h4>
+                                <p className="text-xs text-textMuted mb-4">Each topic rated 0-10 based on problems solved, difficulty, and coverage.</p>
+                                <div className="space-y-2.5">
+                                    {sortedTopicRatings.map(({ topic, rating }) => {
+                                        const c = ratingColor(rating);
+                                        return (
+                                            <div key={topic} className="flex items-center gap-3">
+                                                <span className="text-xs font-semibold text-textMain w-44 truncate shrink-0">{topic}</span>
+                                                <div className="flex-1 bg-border/40 rounded-full h-2.5 overflow-hidden">
+                                                    <div
+                                                        className={`${c.bg} h-2.5 rounded-full transition-all duration-700 ease-out`}
+                                                        style={{ width: `${(rating / 10) * 100}%` }}
+                                                    />
+                                                </div>
+                                                <span className={`text-xs font-bold ${c.text} w-12 text-right shrink-0`}>{rating}/10</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ─── 3 & 4. STRONGEST + WEAKEST AREAS ──────────────── */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {/* Top 3 Strengths */}
+                            {/* Strongest */}
                             <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
                                 <h4 className="font-bold text-textMain text-sm mb-2 flex items-center gap-2">
-                                    <span className="text-leetcodeEasy text-base">💪</span> Top Strengths
+                                    <span className="text-leetcodeEasy text-base">💪</span> Strongest Areas
                                 </h4>
-                                <p className="text-xs text-textMuted mb-4">Areas where you display strong problem-solving proficiency.</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {analysis.strengths && analysis.strengths.length > 0 ? (
-                                        analysis.strengths.map((strength, idx) => (
-                                            <span key={idx} className="px-3 py-1.5 bg-leetcodeEasy/10 border border-leetcodeEasy/30 text-leetcodeEasy text-xs font-semibold rounded-full flex items-center gap-1.5 shadow-sm">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-leetcodeEasy" />
-                                                {strength}
-                                            </span>
+                                <p className="text-xs text-textMuted mb-4">Evidence-based strengths from your solved problems.</p>
+                                <div className="space-y-3">
+                                    {analysis.strongestAreas && analysis.strongestAreas.length > 0 ? (
+                                        analysis.strongestAreas.map((item, idx) => (
+                                            <div key={idx} className="p-3 bg-leetcodeEasy/5 border border-leetcodeEasy/20 rounded-lg">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="text-xs font-bold text-textMain">{item.topic}</span>
+                                                    <span className="text-[10px] font-bold text-leetcodeEasy bg-leetcodeEasy/10 border border-leetcodeEasy/30 px-2 py-0.5 rounded-full">
+                                                        {item.rating}/10
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] text-textMuted leading-relaxed">{item.evidence}</p>
+                                            </div>
                                         ))
                                     ) : (
                                         <p className="text-textMuted text-xs italic">No strengths identified yet.</p>
@@ -323,90 +377,237 @@ const AnalyticsPage = () => {
                                 </div>
                             </div>
 
-                            {/* Areas for Improvement (Weaknesses) */}
+                            {/* Weakest */}
                             <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
                                 <h4 className="font-bold text-textMain text-sm mb-2 flex items-center gap-2">
-                                    <span className="text-leetcodeHard text-base">⚠️</span> Weakness Areas
+                                    <span className="text-leetcodeHard text-base">⚠️</span> Weakest Areas
                                 </h4>
-                                <p className="text-xs text-textMuted mb-4">Topics or habits requiring additional focus and practice.</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {analysis.weaknesses && analysis.weaknesses.length > 0 ? (
-                                        analysis.weaknesses.map((weakness, idx) => (
-                                            <span key={idx} className="px-3 py-1.5 bg-leetcodeHard/10 border border-leetcodeHard/30 text-leetcodeHard text-xs font-semibold rounded-full flex items-center gap-1.5 shadow-sm">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-leetcodeHard" />
-                                                {weakness}
-                                            </span>
+                                <p className="text-xs text-textMuted mb-4">Critical gaps identified from your problem history.</p>
+                                <div className="space-y-3">
+                                    {analysis.weakestAreas && analysis.weakestAreas.length > 0 ? (
+                                        analysis.weakestAreas.map((item, idx) => (
+                                            <div key={idx} className="p-3 bg-leetcodeHard/5 border border-leetcodeHard/20 rounded-lg">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="text-xs font-bold text-textMain">{item.topic}</span>
+                                                    <span className="text-[10px] font-bold text-leetcodeHard bg-leetcodeHard/10 border border-leetcodeHard/30 px-2 py-0.5 rounded-full">
+                                                        {item.rating}/10
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] text-textMuted leading-relaxed">{item.evidence}</p>
+                                            </div>
                                         ))
                                     ) : (
                                         <p className="text-textMuted text-xs italic">No critical weaknesses identified.</p>
                                     )}
                                 </div>
                             </div>
+                        </div>
 
-                            {/* This Week's Focus */}
+                        {/* ─── 5. MISSING INTERVIEW PATTERNS ─────────────────── */}
+                        {analysis.missingInterviewPatterns && analysis.missingInterviewPatterns.length > 0 && (
                             <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
-                                <h4 className="font-bold text-textMain text-sm mb-2 flex items-center gap-2">
-                                    <span className="text-primary text-base">🎯</span> This Week's Focus
+                                <h4 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
+                                    <span className="text-primary text-base">🧩</span> Missing Interview Patterns
                                 </h4>
-                                <p className="text-xs text-textMuted mb-4">Targeted action items to optimize your preparation.</p>
+                                <p className="text-xs text-textMuted mb-4">Key algorithmic patterns you haven't practiced yet.</p>
                                 <div className="space-y-2">
-                                    {analysis.weeklyFocus && analysis.weeklyFocus.length > 0 ? (
-                                        analysis.weeklyFocus.map((focus, i) => (
-                                            <div key={i} className="flex items-center gap-3 p-2.5 bg-background border border-border rounded-lg hover:border-primary/30 transition-colors">
-                                                <div className="w-5 h-5 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-bold text-[10px]">
-                                                    {i + 1}
-                                                </div>
-                                                <span className="text-xs font-semibold text-textMain">{focus}</span>
+                                    {analysis.missingInterviewPatterns.map((item, idx) => (
+                                        <div key={idx} className="flex items-start gap-3 p-3 bg-background border border-border rounded-lg hover:border-primary/30 transition-colors">
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 mt-0.5 ${importanceBadge(item.importance)}`}>
+                                                {item.importance}
+                                            </span>
+                                            <div>
+                                                <span className="text-xs font-bold text-textMain">{item.pattern}</span>
+                                                <p className="text-[11px] text-textMuted mt-0.5">{item.description}</p>
                                             </div>
-                                        ))
-                                    ) : (
-                                        <p className="text-textMuted text-xs italic">No weekly focus items compiled.</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ─── 6. NEXT 10 PROBLEMS TO SOLVE ──────────────────── */}
+                        {analysis.next10Problems && analysis.next10Problems.length > 0 && (
+                            <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                <h4 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
+                                    <span className="text-primary text-base">🚀</span> Next 10 Problems to Solve
+                                </h4>
+                                <p className="text-xs text-textMuted mb-4">Handpicked unsolved problems to fill your skill gaps.</p>
+
+                                {/* Desktop table */}
+                                <div className="hidden md:block overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                        <thead>
+                                            <tr className="border-b border-border">
+                                                <th className="text-left py-2 px-2 text-textMuted font-bold uppercase tracking-wider">#</th>
+                                                <th className="text-left py-2 px-2 text-textMuted font-bold uppercase tracking-wider">Problem</th>
+                                                <th className="text-left py-2 px-2 text-textMuted font-bold uppercase tracking-wider">Difficulty</th>
+                                                <th className="text-left py-2 px-2 text-textMuted font-bold uppercase tracking-wider">Topic</th>
+                                                <th className="text-left py-2 px-2 text-textMuted font-bold uppercase tracking-wider">Why</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {analysis.next10Problems.map((prob, i) => {
+                                                const slug = prob.title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                                                return (
+                                                    <tr key={i} className="border-b border-border/50 hover:bg-primary/5 transition-colors">
+                                                        <td className="py-2.5 px-2 text-textMuted font-bold">{i + 1}</td>
+                                                        <td className="py-2.5 px-2">
+                                                            <a
+                                                                href={`https://leetcode.com/problems/${slug}/`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="font-semibold text-primary hover:underline"
+                                                            >
+                                                                {prob.title}
+                                                            </a>
+                                                        </td>
+                                                        <td className="py-2.5 px-2">
+                                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${diffBadge(prob.difficulty)}`}>
+                                                                {prob.difficulty}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-2">
+                                                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
+                                                                {prob.topic}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-2 text-textMuted max-w-xs">{prob.reason}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* Mobile cards */}
+                                <div className="md:hidden space-y-2">
+                                    {analysis.next10Problems.map((prob, i) => {
+                                        const slug = prob.title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                                        return (
+                                            <div key={i} className="p-3 bg-background border border-border rounded-lg">
+                                                <div className="flex items-center gap-2 mb-1.5">
+                                                    <span className="text-textMuted font-bold text-xs">#{i + 1}</span>
+                                                    <a
+                                                        href={`https://leetcode.com/problems/${slug}/`}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="font-semibold text-xs text-primary hover:underline"
+                                                    >
+                                                        {prob.title}
+                                                    </a>
+                                                </div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${diffBadge(prob.difficulty)}`}>
+                                                        {prob.difficulty}
+                                                    </span>
+                                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-primary/10 text-primary border border-primary/20">
+                                                        {prob.topic}
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] text-textMuted">{prob.reason}</p>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ─── 7. PLACEMENT ASSESSMENT ───────────────────────── */}
+                        {analysis.placementAssessment && (
+                            <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+                                <h4 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
+                                    <span className="text-base">🎯</span> Placement Assessment
+                                </h4>
+                                <p className="text-xs text-textMuted mb-5">Where you stand and how to level up.</p>
+
+                                {/* Current Level Badge */}
+                                <div className="flex items-center gap-3 mb-5">
+                                    <span className="text-xs font-bold text-textMuted uppercase tracking-wider">Current Level:</span>
+                                    <span className="px-4 py-1.5 rounded-full text-sm font-extrabold bg-primary/10 text-primary border border-primary/20">
+                                        {analysis.placementAssessment.currentLevel || 'N/A'}
+                                    </span>
+                                </div>
+
+                                {/* Readiness Bars */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                    <div className="bg-background border border-border rounded-lg p-4">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-xs font-bold text-textMain">🏢 Service Company</span>
+                                            <span className="text-xs font-bold text-leetcodeEasy">{extractPercent(analysis.placementAssessment.serviceCompanyReadiness)}%</span>
+                                        </div>
+                                        <div className="w-full bg-border/40 rounded-full h-3 overflow-hidden mb-2">
+                                            <div
+                                                className="bg-leetcodeEasy h-3 rounded-full transition-all duration-1000 ease-out"
+                                                style={{ width: `${extractPercent(analysis.placementAssessment.serviceCompanyReadiness)}%` }}
+                                            />
+                                        </div>
+                                        <p className="text-[11px] text-textMuted">{analysis.placementAssessment.serviceCompanyReadiness}</p>
+                                    </div>
+                                    <div className="bg-background border border-border rounded-lg p-4">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-xs font-bold text-textMain">🚀 Product Company</span>
+                                            <span className="text-xs font-bold text-leetcodeMedium">{extractPercent(analysis.placementAssessment.productCompanyReadiness)}%</span>
+                                        </div>
+                                        <div className="w-full bg-border/40 rounded-full h-3 overflow-hidden mb-2">
+                                            <div
+                                                className="bg-leetcodeMedium h-3 rounded-full transition-all duration-1000 ease-out"
+                                                style={{ width: `${extractPercent(analysis.placementAssessment.productCompanyReadiness)}%` }}
+                                            />
+                                        </div>
+                                        <p className="text-[11px] text-textMuted">{analysis.placementAssessment.productCompanyReadiness}</p>
+                                    </div>
+                                </div>
+
+                                {/* 4-Week Roadmap */}
+                                <div>
+                                    <h5 className="text-xs font-bold text-textMuted uppercase tracking-wider mb-3">📅 4-Week Improvement Roadmap</h5>
+
+                                    {/* Week tabs */}
+                                    <div className="flex gap-1.5 mb-4 border-b border-border pb-0">
+                                        {weeks.map((wk, i) => (
+                                            <button
+                                                key={wk}
+                                                onClick={() => setActiveWeek(wk)}
+                                                className={`px-3 py-1.5 text-xs font-bold rounded-t-lg transition-colors border border-b-0 ${
+                                                    activeWeek === wk
+                                                        ? 'bg-primary/10 text-primary border-primary/20'
+                                                        : 'bg-background text-textMuted border-transparent hover:text-textMain hover:bg-background'
+                                                }`}
+                                            >
+                                                Week {i + 1}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {/* Active week content */}
+                                    {roadmap[activeWeek] && (
+                                        <div className="bg-background border border-border rounded-lg p-4 animate-fadeIn">
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <span className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-bold text-[10px]">
+                                                    {weeks.indexOf(activeWeek) + 1}
+                                                </span>
+                                                <span className="text-sm font-bold text-textMain">{roadmap[activeWeek].focus}</span>
+                                            </div>
+                                            <div className="mb-3">
+                                                <span className="text-[10px] font-bold text-textMuted uppercase tracking-wider">Problems to Solve:</span>
+                                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                    {(roadmap[activeWeek].problems || []).map((prob, pi) => (
+                                                        <span key={pi} className="px-2.5 py-1 text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 rounded-md">
+                                                            {prob}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="flex items-start gap-2">
+                                                <span className="text-[10px] font-bold text-textMuted uppercase tracking-wider shrink-0">Goal:</span>
+                                                <p className="text-xs text-textMain">{roadmap[activeWeek].goal}</p>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                             </div>
-
-                            {/* AI Insight */}
-                            <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
-                                <h4 className="font-bold text-textMain text-sm mb-2 flex items-center gap-2">
-                                    <span className="text-base">🤖</span> AI Performance Insight
-                                </h4>
-                                <p className="text-xs text-textMuted mb-4">Synthesized evaluation of your learning trajectory.</p>
-                                <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 flex gap-3 items-start relative overflow-hidden">
-                                    <div className="absolute top-0 right-0 transform translate-x-2 -translate-y-2 opacity-5 text-primary text-7xl select-none font-serif">“</div>
-                                    <div className="text-xl mt-0.5">💡</div>
-                                    <div>
-                                        <p className="text-xs text-textMain leading-relaxed italic">
-                                            "{analysis.aiInsight}"
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* BOTTOM SECTION: Recommended Problems */}
-                        <div className="bg-surface border border-border rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
-                            <h4 className="font-bold text-textMain text-sm mb-1 flex items-center gap-2">
-                                <span className="text-primary text-base">🚀</span> Recommended LeetCode Problems
-                            </h4>
-                            <p className="text-xs text-textMuted mb-4">Handpicked challenges tailored to bridge your skills gaps.</p>
-                            <div className="divide-y divide-border border-t border-border mt-2">
-                                {analysis.recommendedProblems && analysis.recommendedProblems.length > 0 ? (
-                                    analysis.recommendedProblems.map((prob, i) => (
-                                        <div key={i} className="py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 hover:bg-primary/5 px-2 rounded-lg transition-colors">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-primary font-bold">▶</span>
-                                                <span className="text-xs font-semibold text-textMain">{prob.title}</span>
-                                            </div>
-                                            <span className="text-xs px-2.5 py-1 bg-surface border border-border rounded-md text-textMuted max-w-xs truncate">
-                                                {prob.reason}
-                                            </span>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p className="text-textMuted text-xs italic py-2">No recommended problems available.</p>
-                                )}
-                            </div>
-                        </div>
+                        )}
                     </div>
                 )}
 

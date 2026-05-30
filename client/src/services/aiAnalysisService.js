@@ -10,19 +10,26 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
  * {
  *   success: boolean,
  *   data: {
- *     readinessScore: number,
- *     strengths: string[],
- *     weaknesses: string[],
- *     weeklyFocus: string[],
- *     aiInsight: string,
- *     recommendedProblems: Array<{ title: string, reason: string }>,
+ *     overallReadinessScore: number (0-100),
+ *     topicStrengthRatings: { [topic: string]: number (0-10) },
+ *     strongestAreas: Array<{ topic: string, rating: number, evidence: string }>,
+ *     weakestAreas: Array<{ topic: string, rating: number, evidence: string }>,
+ *     missingInterviewPatterns: Array<{ pattern: string, importance: string, description: string }>,
+ *     next10Problems: Array<{ title: string, difficulty: string, topic: string, reason: string }>,
+ *     placementAssessment: {
+ *       currentLevel: string,
+ *       serviceCompanyReadiness: string,
+ *       productCompanyReadiness: string,
+ *       fourWeekRoadmap: {
+ *         week1: { focus: string, problems: string[], goal: string },
+ *         week2: { focus: string, problems: string[], goal: string },
+ *         week3: { focus: string, problems: string[], goal: string },
+ *         week4: { focus: string, problems: string[], goal: string }
+ *       }
+ *     },
  *     metrics: {
- *       totalSolved,
- *       easySolved,
- *       mediumSolved,
- *       hardSolved,
- *       consistencyScore,
- *       topicsCovered
+ *       totalSolved, easySolved, mediumSolved, hardSolved,
+ *       consistencyScore, topicsCovered, weightedScore
  *     },
  *     timestamp: string
  *   }

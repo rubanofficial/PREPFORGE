@@ -21,8 +21,10 @@ function toObjectId(userId) {
 }
 
 /**
- * Fetch comprehensive user performance data
- * Combines dashboard stats with detailed problem analysis
+ * Fetch comprehensive user performance data with enriched breakdowns.
+ *
+ * Returns per-topic difficulty counts, weighted scores, solved slugs list,
+ * and full problem details so the AI prompt can make evidence-based judgements.
  */
 async function getUserPerformanceData(userId) {
     const uid = toObjectId(userId);
@@ -34,46 +36,66 @@ async function getUserPerformanceData(userId) {
         return null;
     }
 
-    // Easy, Medium, Hard breakdown
+    // ── Difficulty breakdown ────────────────────────────────────────────
     let easySolved = 0;
     let mediumSolved = 0;
     let hardSolved = 0;
-    
-    // Track topic counts
+
+    // ── Per-topic difficulty breakdown ──────────────────────────────────
+    // { "Array": { easy: 5, medium: 8, hard: 2 }, ... }
+    const topicDifficultyBreakdown = {};
     const topicCounts = {};
+
+    // ── Full solved problem list (for Gemini context) ──────────────────
+    const solvedProblemDetails = [];
+    const solvedProblemSlugs = [];
+
     problems.forEach(p => {
         const diff = p.difficulty?.toLowerCase();
         if (diff === 'easy') easySolved++;
         else if (diff === 'medium') mediumSolved++;
         else if (diff === 'hard') hardSolved++;
-        
+
+        // Collect slug for exclusion list
+        if (p.titleSlug) {
+            solvedProblemSlugs.push(p.titleSlug);
+        }
+
+        // Collect full details for AI context
+        solvedProblemDetails.push({
+            title: p.title,
+            titleSlug: p.titleSlug,
+            difficulty: p.difficulty || 'Unknown',
+            topics: p.topics || []
+        });
+
+        // Build per-topic difficulty map
         p.topics?.forEach(t => {
             if (t) {
-                // Capitalize topic name for consistency
-                const formattedTopic = t.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                const formattedTopic = t.split(' ')
+                    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                    .join(' ');
+
+                // Flat topic count
                 topicCounts[formattedTopic] = (topicCounts[formattedTopic] || 0) + 1;
+
+                // Per-topic difficulty breakdown
+                if (!topicDifficultyBreakdown[formattedTopic]) {
+                    topicDifficultyBreakdown[formattedTopic] = { easy: 0, medium: 0, hard: 0 };
+                }
+                if (diff === 'easy') topicDifficultyBreakdown[formattedTopic].easy++;
+                else if (diff === 'medium') topicDifficultyBreakdown[formattedTopic].medium++;
+                else if (diff === 'hard') topicDifficultyBreakdown[formattedTopic].hard++;
             }
         });
     });
 
     const totalSolved = problems.length;
 
-    // Strong topics: top 3 most solved topics
-    const sortedTopics = Object.entries(topicCounts)
-        .sort((a, b) => b[1] - a[1]);
-    
-    const strongTopics = sortedTopics.slice(0, 3).map(([name]) => name);
-    
-    // Core LeetCode topics to check for weak areas if the user hasn't solved much
-    const coreTopics = ['Array', 'String', 'Hash Table', 'Dynamic Programming', 'Graph', 'Tree', 'Two Pointers', 'Binary Search', 'Stack', 'Queue', 'Heap (Priority Queue)'];
-    const weakTopics = coreTopics
-        .filter(t => !strongTopics.includes(t))
-        .map(t => ({ name: t, count: topicCounts[t] || 0 }))
-        .sort((a, b) => a.count - b.count)
-        .slice(0, 3)
-        .map(t => t.name);
+    // ── Weighted score: easy×1 + medium×2 + hard×3 ─────────────────────
+    const weightedScore = (easySolved * 1) + (mediumSolved * 2) + (hardSolved * 3);
 
-    // Consistency score: active days in last 30 days (target: 12 days for 100%)
+    // ── Consistency score: active days in last 30 days ──────────────────
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const activeDaysCount = new Set(
@@ -84,24 +106,28 @@ async function getUserPerformanceData(userId) {
     const consistencyScore = Math.min(100, Math.round((activeDaysCount / 12) * 100)) || 0;
 
     const topicsCovered = Object.keys(topicCounts).length;
-    const recentProblems = problems.slice(0, 5).map(p => `${p.title} (${p.difficulty || 'Medium'})`);
 
     return {
         totalSolved,
         easySolved,
         mediumSolved,
         hardSolved,
-        strongTopics,
-        weakTopics,
+        weightedScore,
         consistencyScore,
         topicsCovered,
-        recentProblems
+        topicCounts,
+        topicDifficultyBreakdown,
+        solvedProblemSlugs,
+        solvedProblemDetails
     };
 }
 
 /**
- * Generate AI-powered performance analysis using Gemini
- * Identifies weaknesses and strengths in the user's problem-solving pattern
+ * Generate AI-powered performance analysis using Gemini.
+ *
+ * Sends enriched data to Gemini with strict rules for granular topic
+ * classification, weighted scoring, evidence-based ratings, unsolved-only
+ * recommendations, placement assessment, and a 4-week roadmap.
  */
 async function analyzeUserPerformance(userId) {
     try {
@@ -114,35 +140,126 @@ async function analyzeUserPerformance(userId) {
             };
         }
 
-        // Prepare data summary for the prompt
-        const prompt = `You are a LeetCode performance analytics engine.
-Analyze this user's LeetCode performance data and generate insights.
+        // ── Build the comprehensive prompt ─────────────────────────────
+        const prompt = `You are a brutally honest, evidence-based LeetCode performance analytics engine.
+Analyze this user's complete LeetCode problem-solving history and generate a comprehensive analysis.
 
-User Performance Data:
-${JSON.stringify(performanceData, null, 2)}
+═══════════════════════════════════════════════════════════
+USER PERFORMANCE DATA
+═══════════════════════════════════════════════════════════
 
-You must return a valid JSON object matching this schema:
+Summary:
+- Total Unique Accepted Problems: ${performanceData.totalSolved}
+- Easy: ${performanceData.easySolved} | Medium: ${performanceData.mediumSolved} | Hard: ${performanceData.hardSolved}
+- Weighted Score (E×1 + M×2 + H×3): ${performanceData.weightedScore}
+- Consistency Score (last 30 days): ${performanceData.consistencyScore}%
+- Topics Covered: ${performanceData.topicsCovered}
+
+Per-Topic Difficulty Breakdown:
+${JSON.stringify(performanceData.topicDifficultyBreakdown, null, 2)}
+
+All Solved Problems (title, difficulty, topics):
+${JSON.stringify(performanceData.solvedProblemDetails, null, 2)}
+
+Already Solved Problem Slugs (DO NOT recommend these):
+${JSON.stringify(performanceData.solvedProblemSlugs)}
+
+═══════════════════════════════════════════════════════════
+CRITICAL ANALYSIS RULES
+═══════════════════════════════════════════════════════════
+
+1. Do NOT judge topic strength using only problem tags or counts. Analyze the ACTUAL problems solved and their difficulty.
+2. Give MORE weight to Medium and Hard problems than Easy problems when computing ratings. A user who solved 10 Easy array problems is weaker than one who solved 3 Medium + 2 Hard.
+3. The data already contains only unique accepted problems. Do not double-count.
+4. Do NOT recommend ANY problem whose titleSlug appears in the solvedProblemSlugs list above.
+5. You MUST distinguish between these sub-categories and rate them SEPARATELY:
+   - "Basic Graphs" (BFS, DFS, connected components, flood fill) vs "Advanced Graphs" (Dijkstra, MST, Bellman-Ford, weighted graph algorithms)
+   - "Basic DP" (fibonacci, climbing stairs, house robber, coin change basic) vs "Advanced DP" (bitmask DP, digit DP, interval DP, knapsack variants, LCS/LIS optimization)
+   - "Binary Search Basics" (standard sorted array search) vs "Binary Search on Answer" (min/max optimization, capacity-type problems)
+   - "Heap / Priority Queue" as its own separate category (NOT merged with anything)
+6. Prioritize MISSING patterns over repeating already-mastered topics in the next10Problems recommendations.
+7. Be brutally honest and evidence-based. Do NOT use generic advice. Justify every conclusion with actual solved problems from the data.
+8. The overallReadinessScore must factor in: total unique problems, difficulty distribution (heavily weighted), topic coverage breadth, consistency, and weak area severity. Users with fewer than 50 problems or poor difficulty mix should NOT score above 50.
+9. Provide EXACTLY 3-5 items for strongestAreas and weakestAreas, each with specific evidence from the solved problems.
+10. Provide EXACTLY 3-5 missing interview patterns.
+11. Provide EXACTLY 10 problems for next10Problems. ALL must be real LeetCode problems. NONE may be already solved.
+12. The 4-week roadmap must be specific and actionable based on the user's actual gaps. Not generic.
+
+═══════════════════════════════════════════════════════════
+REQUIRED OUTPUT JSON SCHEMA
+═══════════════════════════════════════════════════════════
+
+Return a valid JSON object matching this EXACT schema:
+
 {
-  "readinessScore": number (0-100),
-  "strengths": string[] (Exactly 3 strengths. Keep them short, max 3 words each, capitalized. e.g. "Dynamic Programming", "Array Problems"),
-  "weaknesses": string[] (Exactly 3 weaknesses. Keep them short, max 3 words each, capitalized. e.g. "Hard Problems", "Graph Traversal"),
-  "weeklyFocus": string[] (Exactly 3 concrete actionable goals for this week, max 10 words each),
-  "aiInsight": string (A concise summary of their current standing, exactly 1-2 sentences, max 40 words),
-  "recommendedProblems": [
+  "overallReadinessScore": number (0-100),
+  "topicStrengthRatings": {
+    "Arrays": number (0-10),
+    "Strings": number (0-10),
+    "Sliding Window": number (0-10),
+    "Linked List": number (0-10),
+    "Trees": number (0-10),
+    "Binary Search Basics": number (0-10),
+    "Binary Search on Answer": number (0-10),
+    "Basic Graphs": number (0-10),
+    "Advanced Graphs": number (0-10),
+    "Heap / Priority Queue": number (0-10),
+    "Basic DP": number (0-10),
+    "Advanced DP": number (0-10),
+    "Stack": number (0-10),
+    "Queue": number (0-10),
+    "Two Pointers": number (0-10),
+    "Backtracking": number (0-10),
+    "Greedy": number (0-10),
+    "Math": number (0-10),
+    "Bit Manipulation": number (0-10),
+    "Trie": number (0-10)
+  },
+  "strongestAreas": [
     {
-      "title": string (Exact name of a LeetCode problem),
-      "reason": string (Short reason why they should solve it, max 10 words)
+      "topic": string,
+      "rating": number (0-10),
+      "evidence": string (cite specific solved problems and difficulty)
     }
-  ] (Recommend exactly 2-3 standard LeetCode problems aligned with their weaknesses/weekly focus)
+  ],
+  "weakestAreas": [
+    {
+      "topic": string,
+      "rating": number (0-10),
+      "evidence": string (cite what is missing)
+    }
+  ],
+  "missingInterviewPatterns": [
+    {
+      "pattern": string,
+      "importance": "High" | "Medium" | "Low",
+      "description": string
+    }
+  ],
+  "next10Problems": [
+    {
+      "title": string (exact LeetCode problem name),
+      "difficulty": "Easy" | "Medium" | "Hard",
+      "topic": string,
+      "reason": string (why this problem fills a gap)
+    }
+  ],
+  "placementAssessment": {
+    "currentLevel": string (e.g. "Beginner", "Mid-Level", "Advanced", "Expert"),
+    "serviceCompanyReadiness": string (e.g. "85% — Ready for most service company interviews"),
+    "productCompanyReadiness": string (e.g. "55% — Needs significant DP and Advanced Graph work"),
+    "fourWeekRoadmap": {
+      "week1": { "focus": string, "problems": string[], "goal": string },
+      "week2": { "focus": string, "problems": string[], "goal": string },
+      "week3": { "focus": string, "problems": string[], "goal": string },
+      "week4": { "focus": string, "problems": string[], "goal": string }
+    }
+  }
 }
 
-CRITICAL RULES:
-1. Do NOT include any markdown code blocks (e.g. \`\`\`json ... \`\`\`), HTML tags, or extra text. Return ONLY the JSON object.
-2. Ensure the JSON is perfectly formatted and parsable.
-3. The readinessScore should be a calculated estimate based on totalSolved, consistencyScore, difficulty breakdown, and weak topics. A user with fewer than 50 solved problems or low consistency should not have a score above 50.
-`;
+Return ONLY the JSON object. No markdown, no code fences, no extra text.`;
 
-        // Call Gemini API using new @google/genai SDK with responseMimeType config
+        // ── Call Gemini API ─────────────────────────────────────────────
         const result = await getAI().models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
@@ -165,7 +282,8 @@ CRITICAL RULES:
                 mediumSolved: performanceData.mediumSolved,
                 hardSolved: performanceData.hardSolved,
                 consistencyScore: performanceData.consistencyScore,
-                topicsCovered: performanceData.topicsCovered
+                topicsCovered: performanceData.topicsCovered,
+                weightedScore: performanceData.weightedScore
             }
         };
     } catch (error) {
