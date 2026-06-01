@@ -18,18 +18,40 @@ const allowedOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
     : null
 
+// Dynamic CORS origin checker - allows explicit origins from env var
+// plus any prepforge*.vercel.app subdomain automatically
+const corsOriginCheck = (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true)
+
+    // If no explicit origins configured, allow all
+    if (!allowedOrigins) return callback(null, true)
+
+    // Check against explicit allowlist
+    if (allowedOrigins.includes(origin)) return callback(null, true)
+
+    // Auto-allow any prepforge Vercel deployment (preview & production URLs)
+    if (/^https:\/\/prepforge[a-z0-9-]*\.vercel\.app$/.test(origin)) {
+        return callback(null, true)
+    }
+
+    // Reject unknown origins
+    callback(new Error(`CORS: Origin ${origin} not allowed`))
+}
+
 console.log('🔐 CORS Allowed Origins:', allowedOrigins || 'ALL')
+console.log('🔐 CORS also auto-allows: https://prepforge*.vercel.app')
 
 const io = new SocketServer(httpServer, {
     cors: {
-        origin: allowedOrigins || true,
+        origin: corsOriginCheck,
         credentials: true,
     },
 })
 
 // Middleware
 app.use(cors({
-    origin: allowedOrigins || true,
+    origin: corsOriginCheck,
     credentials: true,
 }))
 app.use(express.json())
