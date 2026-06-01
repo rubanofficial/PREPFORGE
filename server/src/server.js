@@ -3,10 +3,13 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server as SocketServer } from 'socket.io'
+import { fileURLToPath } from 'url'
+import path from 'path'
 import connectDB from './config/database.js'
 import authRoutes from './routes/authRoutes.js'
 import leetcodeRoutes from './routes/leetcodeRoutes.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config()
 
 const app = express()
@@ -41,6 +44,20 @@ app.use('/api/auth', authRoutes)
 
 // LeetCode routes
 app.use('/api/leetcode', leetcodeRoutes)
+
+// Serve static files from React build
+const clientDistPath = path.join(__dirname, '../../client/dist')
+app.use(express.static(clientDistPath))
+
+// React Router fallback - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+    const indexPath = path.join(clientDistPath, 'index.html')
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            res.status(404).json({ error: 'Not found' })
+        }
+    })
+})
 
 // Socket.io connection
 io.on('connection', (socket) => {

@@ -1,0 +1,15 @@
+node_modules
+.git
+.gitignore
+.env.example
+README.md
+FILE_STRUCTURE_PHASE2.md
+AUTH_TESTING_GUIDE.md
+client/README.md
+client/FRONTEND_ARCHITECTURE.md
+server/README.md
+server/AI_ANALYSIS_SETUP.md
+server/test-endpoints.ps1
+.vscode
+dist
+build
