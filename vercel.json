@@ -3,7 +3,7 @@
     "outputDirectory": "client/dist",
     "framework": "vite",
     "env": {
-        "VITE_API_URL": "/api",
+        "VITE_API_URL": "https://prepforge-29le.onrender.com/api",
         "VITE_SOCKET_URL": "https://prepforge-29le.onrender.com"
     },
     "rewrites": [

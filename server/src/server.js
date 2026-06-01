@@ -14,7 +14,11 @@ dotenv.config()
 
 const app = express()
 const httpServer = createServer(app)
-const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : null
+const allowedOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+    : null
+
+console.log('🔐 CORS Allowed Origins:', allowedOrigins || 'ALL')
 
 const io = new SocketServer(httpServer, {
     cors: {
