@@ -1,19 +1,19 @@
 {
-  "name": "prepforge",
-  "version": "1.0.0",
-  "description": "PrepForge - LeetCode Problem Tracking and AI Analysis Platform",
-  "type": "module",
-  "engines": {
-    "node": "18.x"
-  },
-  "scripts": {
-    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
-    "build": "npm run build --prefix client",
-    "start": "node server/src/server.js",
-    "install-all": "npm install && npm install --prefix server && npm install --prefix client",
-    "postinstall": "npm install --prefix server && npm install --prefix client"
-  },
-  "dependencies": {
-    "concurrently": "^8.2.2"
-  }
+    "name": "prepforge",
+    "version": "1.0.0",
+    "description": "PrepForge - LeetCode Problem Tracking and AI Analysis Platform",
+    "type": "module",
+    "engines": {
+        "node": "24.x"
+    },
+    "scripts": {
+        "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+        "build": "npm run build --prefix client",
+        "start": "node server/src/server.js",
+        "install-all": "npm install && npm install --prefix server && npm install --prefix client",
+        "postinstall": "npm install --prefix server && npm install --prefix client"
+    },
+    "dependencies": {
+        "concurrently": "^8.2.2"
+    }
 }
