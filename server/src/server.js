@@ -49,25 +49,12 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'Server is running' })
 })
 
-// Auth routes
+// Auth routes - MUST be before static middleware
 app.use('/api/auth', authRoutes)
 
-// LeetCode routes
+// LeetCode routes - MUST be before static middleware
 app.use('/api/leetcode', leetcodeRoutes)
 
-// Serve static files from React build
-const clientDistPath = path.join(__dirname, '../../client/dist')
-app.use(express.static(clientDistPath))
-
-// React Router fallback - serve index.html for all non-API routes
-app.get('*', (req, res) => {
-    const indexPath = path.join(clientDistPath, 'index.html')
-    res.sendFile(indexPath, (err) => {
-        if (err) {
-            res.status(404).json({ error: 'Not found' })
-        }
-    })
-})
 
 // Socket.io connection
 io.on('connection', (socket) => {
