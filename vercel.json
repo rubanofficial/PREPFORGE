@@ -2,11 +2,11 @@
     "buildCommand": "npm run build",
     "outputDirectory": "client/dist",
     "framework": "vite",
-    "env": {
-        "VITE_API_URL": "https://prepforge-29le.onrender.com/api",
-        "VITE_SOCKET_URL": "https://prepforge-29le.onrender.com"
-    },
     "rewrites": [
+        {
+            "source": "/api/:path*",
+            "destination": "https://prepforge-29le.onrender.com/api/:path*"
+        },
         {
             "source": "/(.*)",
             "destination": "/index.html"
