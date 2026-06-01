@@ -20,15 +20,22 @@ const RegisterPage = () => {
 
         try {
             const body = { name, email, username, password, passwordConfirm };
+            console.log('Starting registration with:', { ...body, password: '***', passwordConfirm: '***' });
             const res = await authService.register(body);
+            console.log('Registration successful:', res);
 
             if (res && res.success) {
                 navigate('/login');
             } else {
-                setError(res?.message || 'Registration failed');
+                const errorMsg = res?.message || 'Registration failed';
+                console.warn('Registration returned non-success:', errorMsg);
+                setError(errorMsg);
             }
         } catch (err) {
-            setError(err?.message || err?.error || 'Registration failed');
+            console.error('Registration error caught:', err);
+            const errorMsg = err?.message || err?.error || JSON.stringify(err) || 'Registration failed';
+            console.error('Setting error message:', errorMsg);
+            setError(errorMsg);
         } finally {
             setLoading(false);
         }

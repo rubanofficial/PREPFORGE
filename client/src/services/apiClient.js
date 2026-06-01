@@ -2,6 +2,8 @@ import axios from 'axios'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
 
+console.log('API Client - API_URL:', API_URL);
+
 const apiClient = axios.create({
     baseURL: API_URL,
     headers: {
@@ -15,13 +17,27 @@ apiClient.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`
     }
+    console.log('API Request:', config.method.toUpperCase(), config.url);
     return config
-}, (error) => Promise.reject(error))
+}, (error) => {
+    console.error('API Request Error:', error);
+    return Promise.reject(error);
+})
 
 // Handle response errors
 apiClient.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        console.log('API Response:', response.status, response.config.url, response.data);
+        return response;
+    },
     (error) => {
+        console.error('API Error Response:', {
+            status: error.response?.status,
+            url: error.config?.url,
+            data: error.response?.data,
+            message: error.message
+        });
+        
         if (error.response?.status === 401) {
             localStorage.removeItem('token')
             window.location.href = '/login'

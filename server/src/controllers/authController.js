@@ -7,35 +7,44 @@ import { asyncHandler, AppError } from '../utils/errorHandler.js'
 // @access  Public
 export const register = asyncHandler(async (req, res, next) => {
     const { name, email, username, password, passwordConfirm } = req.body
+    
+    console.log('=== REGISTER REQUEST ===')
+    console.log('Body:', { name, email, username, passwordConfirm: passwordConfirm ? '***' : undefined })
 
     // Validate input
     if (!name || !email || !username || !password || !passwordConfirm) {
+        console.log('Missing fields:', { name, email, username, password: !!password, passwordConfirm })
         return next(new AppError('Please provide all required fields', 400))
     }
 
     // Validate username format
     if (username.length < 3 || username.length > 30) {
+        console.log('Invalid username length:', username.length)
         return next(new AppError('Username must be between 3 and 30 characters', 400))
     }
 
     if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+        console.log('Invalid username format:', username)
         return next(new AppError('Username can only contain letters, numbers, underscore, and dash', 400))
     }
 
     // Check if passwords match
     if (password !== passwordConfirm) {
+        console.log('Passwords do not match')
         return next(new AppError('Passwords do not match', 400))
     }
 
     // Check if user already exists by email
     let user = await User.findOne({ email: email.toLowerCase() })
     if (user) {
+        console.log('User already exists with email:', email)
         return next(new AppError('User already exists with that email', 409))
     }
 
     // Check if username is already taken
     user = await User.findOne({ username: username.toLowerCase() })
     if (user) {
+        console.log('Username already taken:', username)
         return next(new AppError('Username is already taken', 409))
     }
 
@@ -46,6 +55,8 @@ export const register = asyncHandler(async (req, res, next) => {
         username: username.toLowerCase(),
         password,
     })
+    
+    console.log('User created successfully:', user._id)
 
     // Generate JWT token
     const token = generateToken(user._id)
@@ -62,6 +73,8 @@ export const register = asyncHandler(async (req, res, next) => {
             token,
         },
     })
+    
+    console.log('=== REGISTER SUCCESS ===')
 })
 
 // @desc    Login user

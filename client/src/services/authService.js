@@ -12,20 +12,31 @@ const authService = {
     // Register user
     async register(credentials) {
         try {
+            console.log('Attempting to register with:', { ...credentials, password: '***' })
             const response = await apiClient.post(AUTH_ENDPOINTS.REGISTER, credentials)
+            console.log('Registration response:', response.data)
             return response.data
         } catch (error) {
-            throw error.response?.data || { message: 'Registration failed' }
+            console.error('Registration error:', error)
+            console.error('Error response:', error.response?.data)
+            console.error('Error message:', error.message)
+            const errorMsg = error.response?.data?.message || error.message || 'Registration failed'
+            throw { message: errorMsg, ...error.response?.data }
         }
     },
 
     // Login user
     async login(credentials) {
         try {
+            console.log('Attempting to login with:', { ...credentials, password: '***' })
             const response = await apiClient.post(AUTH_ENDPOINTS.LOGIN, credentials)
+            console.log('Login response:', response.data)
             return response.data
         } catch (error) {
-            throw error.response?.data || { message: 'Login failed' }
+            console.error('Login error:', error)
+            console.error('Error response:', error.response?.data)
+            const errorMsg = error.response?.data?.message || error.message || 'Login failed'
+            throw { message: errorMsg, ...error.response?.data }
         }
     },
 
@@ -44,7 +55,9 @@ const authService = {
             const response = await apiClient.get(AUTH_ENDPOINTS.GET_PROFILE)
             return response.data
         } catch (error) {
-            throw error.response?.data || { message: 'Failed to fetch profile' }
+            console.error('Get profile error:', error)
+            const errorMsg = error.response?.data?.message || error.message || 'Failed to fetch profile'
+            throw { message: errorMsg, ...error.response?.data }
         }
     },
 

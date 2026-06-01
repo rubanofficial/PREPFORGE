@@ -31,6 +31,12 @@ app.use(cors({
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
+// Request logging middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`)
+    next()
+})
+
 // Connect Database
 await connectDB()
 
@@ -70,7 +76,11 @@ io.on('connection', (socket) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error(err.stack)
+    console.error('===== ERROR OCCURRED =====')
+    console.error('Endpoint:', req.method, req.path)
+    console.error('Error Message:', err.message)
+    console.error('Error Stack:', err.stack)
+    console.error('===== END ERROR =====')
 
     const statusCode = err.statusCode || 500
     const message = err.message || 'Something went wrong!'
