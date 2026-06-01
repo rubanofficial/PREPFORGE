@@ -7,7 +7,7 @@ import { asyncHandler, AppError } from '../utils/errorHandler.js'
 // @access  Public
 export const register = asyncHandler(async (req, res, next) => {
     const { name, email, username, password, passwordConfirm } = req.body
-    
+
     console.log('=== REGISTER REQUEST ===')
     console.log('Body:', { name, email, username, passwordConfirm: passwordConfirm ? '***' : undefined })
 
@@ -55,7 +55,7 @@ export const register = asyncHandler(async (req, res, next) => {
         username: username.toLowerCase(),
         password,
     })
-    
+
     console.log('User created successfully:', user._id)
 
     // Generate JWT token
@@ -73,7 +73,7 @@ export const register = asyncHandler(async (req, res, next) => {
             token,
         },
     })
-    
+
     console.log('=== REGISTER SUCCESS ===')
 })
 
