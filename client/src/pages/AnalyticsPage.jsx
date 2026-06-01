@@ -74,6 +74,8 @@ const AnalyticsPage = () => {
             const response = await getPerformanceAnalysis();
             if (response.success) {
                 setAnalysis(response.data);
+                // Save to localStorage so Dashboard can access it
+                localStorage.setItem('aiAnalysis', JSON.stringify(response.data));
             } else {
                 setAiError(response.message);
             }
@@ -117,9 +119,18 @@ const AnalyticsPage = () => {
 
     return (
         <div className="space-y-6">
-            <header>
-                <h1 className="text-2xl font-bold tracking-tight text-textMain">Intelligence Analytics</h1>
-                <p className="text-sm text-textMuted mt-1">Deep insights into your learning patterns and mastery.</p>
+            <header className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-textMain">Intelligence Analytics</h1>
+                    <p className="text-sm text-textMuted mt-1">Deep insights into your learning patterns and mastery.</p>
+                </div>
+                <button
+                    onClick={fetchAIAnalysis}
+                    disabled={aiLoading || !hasData}
+                    className="px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                    {aiLoading ? 'Computing...' : 'Compute Analysis'}
+                </button>
             </header>
 
             {loading && (
@@ -130,6 +141,12 @@ const AnalyticsPage = () => {
 
             {error && (
                 <div className="p-4 bg-red-50 text-red-700 rounded">Error loading analytics: {String(error)}</div>
+            )}
+
+            {aiError && (
+                <div className="p-4 bg-danger/10 border border-danger/30 text-danger rounded">
+                    Error computing analysis: {aiError}
+                </div>
             )}
 
             {/* Stat Cards */}

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import StatCard from '../components/UI/StatCard';
 import SyncProgressCard from '../components/UI/SyncProgressCard';
-import { Target, CheckCircle, Code, Flame } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Target, CheckCircle, Code, Flame, TrendingUp, AlertCircle } from 'lucide-react';
 import analyticsService from '../services/analyticsService';
 import problemService from '../services/problemService';
 
@@ -19,7 +19,11 @@ const DashboardPage = () => {
     const [stats, setStats] = useState(defaultStats);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [activity, setActivity] = useState(defaultActivity);
+    const [problems, setProblems] = useState([]);
+    const [aiAnalysis, setAiAnalysis] = useState(null);
+    
+    // Get sync state from Redux
+    const syncState = useSelector((state) => state.sync);
 
     useEffect(() => {
         const loadStatsAndActivity = async () => {
@@ -40,38 +44,18 @@ const DashboardPage = () => {
 
                 // Fetch user's problems (get recent history, use large limit)
                 const problemsPayload = await problemService.getProblems({ limit: 1000 });
-                const problems = (problemsPayload && problemsPayload.data) ? problemsPayload.data : [];
+                const problemsList = (problemsPayload && problemsPayload.data) ? problemsPayload.data : [];
+                setProblems(problemsList);
 
-                // Build last-7-days buckets (oldest -> newest)
-                const days = [];
-                const labels = [];
-                const now = new Date();
-                for (let i = 6; i >= 0; i--) {
-                    const d = new Date(now);
-                    d.setDate(now.getDate() - i);
-                    days.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
-                    labels.push(d.toLocaleDateString(undefined, { weekday: 'short' }));
-                }
-
-                const counts = new Array(7).fill(0);
-                problems.forEach((p) => {
-                    const solved = p.solvedAt ? new Date(p.solvedAt) : null;
-                    if (!solved) return;
-                    for (let i = 0; i < days.length; i++) {
-                        const day = days[i];
-                        if (
-                            solved.getFullYear() === day.getFullYear() &&
-                            solved.getMonth() === day.getMonth() &&
-                            solved.getDate() === day.getDate()
-                        ) {
-                            counts[i]++;
-                            break;
-                        }
+                // Get saved AI analysis from localStorage (set by Analytics page)
+                const savedAnalysis = localStorage.getItem('aiAnalysis');
+                if (savedAnalysis) {
+                    try {
+                        setAiAnalysis(JSON.parse(savedAnalysis));
+                    } catch (err) {
+                        console.log('Could not parse saved AI analysis');
                     }
-                });
-
-                const activityData = labels.map((name, idx) => ({ name, problems: counts[idx] }));
-                setActivity(activityData);
+                }
 
             } catch (err) {
                 setError(err?.response?.data?.message || err?.message || 'Failed to load dashboard');
@@ -127,80 +111,131 @@ const DashboardPage = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* SECTION 4: Analytics Placeholder */}
+                {/* SECTION 4: AI Analysis */}
                 <div className="lg:col-span-2 bg-surface border border-border rounded-lg p-6">
-                    <div className="mb-4">
-                        <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider">Weekly Consistency</h3>
+                    <div className="mb-6 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider">AI Analysis</h3>
                     </div>
-                    <div className="h-64 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={activity} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorProblems" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.4} />
-                                        <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.05} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                                <XAxis
-                                    dataKey="name"
-                                    stroke="var(--text-muted)"
-                                    fontSize={12}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    dy={5}
-                                />
-                                <YAxis
-                                    stroke="var(--text-muted)"
-                                    fontSize={12}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    allowDecimals={false}
-                                    domain={[0, (dataMax) => Math.max(dataMax + 1, 5)]}
-                                />
-                                <Tooltip
-                                    contentStyle={{
-                                        backgroundColor: 'var(--surface)',
-                                        borderColor: 'var(--border)',
-                                        color: 'var(--text-main)',
-                                        borderRadius: '8px',
-                                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                                        padding: '8px 12px',
-                                    }}
-                                    itemStyle={{ color: 'var(--primary)' }}
-                                    labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 500 }}
-                                    cursor={{ stroke: 'var(--primary)', strokeWidth: 1, strokeDasharray: '4 4' }}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="problems"
-                                    stroke="var(--primary)"
-                                    strokeWidth={2.5}
-                                    fillOpacity={1}
-                                    fill="url(#colorProblems)"
-                                    dot={{ r: 4, fill: 'var(--surface)', stroke: 'var(--primary)', strokeWidth: 2 }}
-                                    activeDot={{ r: 6, fill: 'var(--primary)', stroke: 'var(--surface)', strokeWidth: 2 }}
-                                    animationDuration={800}
-                                    animationEasing="ease-in-out"
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
+                    
+                    {aiAnalysis ? (
+                        <div className="space-y-6">
+                            {/* Readiness Score */}
+                            <div className="bg-background/50 rounded-lg p-4 border border-primary/20">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-sm font-semibold text-textMain flex items-center gap-2">
+                                        <TrendingUp size={16} className="text-primary" />
+                                        Overall Readiness Score
+                                    </span>
+                                    <span className="text-2xl font-bold text-primary">{aiAnalysis.overallReadinessScore}/100</span>
+                                </div>
+                                <div className="w-full bg-background rounded-full h-2 overflow-hidden">
+                                    <div 
+                                        className="h-full bg-gradient-to-r from-primary to-primary/60 transition-all duration-500" 
+                                        style={{ width: `${aiAnalysis.overallReadinessScore}%` }}
+                                    ></div>
+                                </div>
+                            </div>
+
+                            {/* Strongest Areas */}
+                            {aiAnalysis.strongestAreas && aiAnalysis.strongestAreas.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-textMain uppercase mb-2 opacity-70">Strongest Areas</h4>
+                                    <div className="space-y-2">
+                                        {aiAnalysis.strongestAreas.slice(0, 3).map((area, idx) => (
+                                            <div key={idx} className="p-2 bg-background/50 rounded border border-success/20">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-semibold text-success">{area.topic}</span>
+                                                    <span className="text-xs text-textMuted">{area.rating}/10</span>
+                                                </div>
+                                                <p className="text-xs text-textMuted mt-1">{area.evidence}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Weakest Areas */}
+                            {aiAnalysis.weakestAreas && aiAnalysis.weakestAreas.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-textMain uppercase mb-2 opacity-70 flex items-center gap-1">
+                                        <AlertCircle size={14} className="text-danger" />
+                                        Areas for Improvement
+                                    </h4>
+                                    <div className="space-y-2">
+                                        {aiAnalysis.weakestAreas.slice(0, 3).map((area, idx) => (
+                                            <div key={idx} className="p-2 bg-background/50 rounded border border-danger/20">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-semibold text-danger">{area.topic}</span>
+                                                    <span className="text-xs text-textMuted">{area.rating}/10</span>
+                                                </div>
+                                                <p className="text-xs text-textMuted mt-1">{area.evidence}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Current Level */}
+                            {aiAnalysis.placementAssessment && (
+                                <div className="bg-background/50 rounded-lg p-3 border border-border">
+                                    <p className="text-xs text-textMuted mb-1">Interview Readiness</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <p className="text-xs font-semibold text-textMain">Service Companies</p>
+                                            <p className="text-xs text-primary font-bold mt-1">{aiAnalysis.placementAssessment.serviceCompanyReadiness}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-semibold text-textMain">Product Companies</p>
+                                            <p className="text-xs text-primary font-bold mt-1">{aiAnalysis.placementAssessment.productCompanyReadiness}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="flex items-center justify-center h-64 text-textMuted text-sm border border-dashed border-border rounded bg-background/50 flex-col gap-2">
+                            <p>AI analysis not available yet.</p>
+                            <p className="text-xs">Go to <span className="text-primary font-semibold">Analytics</span> page and click <span className="text-primary font-semibold">Compute Analysis</span> button.</p>
+                        </div>
+                    )}
                 </div>
 
                 {/* SECTION 3: Sync Status Overview */}
                 <div className="lg:col-span-1 space-y-6">
                     <SyncProgressCard
-                        status="completed"
-                        progressPercent={100}
-                        metadata={{ fetchedFromProvider: 342, insertedToDatabase: 0 }}
+                        status={syncState.status}
+                        progressPercent={syncState.progressPercent}
+                        metadata={syncState.progress}
                     />
 
-                    {/* SECTION 2: Recent Activity Placeholder */}
+                    {/* SECTION 2: Recent Activity */}
                     <div className="bg-surface border border-border rounded-lg p-6 flex flex-col h-[calc(100%-144px)]">
                         <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-4">Recent Solved</h3>
-                        <div className="flex-1 flex items-center justify-center text-textMuted text-sm border border-dashed border-border rounded bg-background/50">
-                            No recent activity found.
+                        <div className="flex-1 flex flex-col overflow-y-auto gap-2">
+                            {problems.length > 0 ? (
+                                problems.slice(0, 5).map((p) => (
+                                    <div key={p._id || p.id} className="p-3 bg-background rounded border border-border hover:border-primary transition-colors">
+                                        <p className="font-mono text-xs text-primary truncate">{p.title}</p>
+                                        <div className="flex items-center justify-between mt-1">
+                                            <span className="text-xs text-textMuted">
+                                                {p.solvedAt ? new Date(p.solvedAt).toLocaleDateString() : 'N/A'}
+                                            </span>
+                                            {p.difficulty && (
+                                                <span className={`text-xs font-semibold ${p.difficulty === 'Easy' ? 'text-leetcodeEasy' :
+                                                    p.difficulty === 'Medium' ? 'text-leetcodeMedium' :
+                                                        'text-leetcodeHard'
+                                                    }`}>
+                                                    {p.difficulty}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center text-textMuted text-sm border border-dashed border-border rounded bg-background/50">
+                                    No recent activity found.
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
