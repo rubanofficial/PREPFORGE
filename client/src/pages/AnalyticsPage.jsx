@@ -48,7 +48,14 @@ const AnalyticsPage = () => {
     const { stats, loading, error } = useSelector((s) => s.analytics || {});
 
     // AI Analysis state
-    const [analysis, setAnalysis] = useState(null);
+    const [analysis, setAnalysis] = useState(() => {
+        try {
+            const saved = localStorage.getItem('aiAnalysis');
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            return null;
+        }
+    });
     const [aiLoading, setAiLoading] = useState(false);
     const [aiError, setAiError] = useState(null);
     const [activeWeek, setActiveWeek] = useState('week1');
@@ -60,12 +67,8 @@ const AnalyticsPage = () => {
         dispatch(fetchStats());
     }, [dispatch]);
 
-    // Fetch AI analysis when component mounts and has data
-    useEffect(() => {
-        if (hasData) {
-            fetchAIAnalysis();
-        }
-    }, [hasData]);
+    // We no longer automatically fetch AI analysis on mount to save API calls.
+    // The user must click the refresh/compute button manually.
 
     const fetchAIAnalysis = async () => {
         setAiLoading(true);

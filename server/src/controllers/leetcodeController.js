@@ -743,7 +743,11 @@ const storeSession = asyncHandler(async (req, res, next) => {
     }
 
     // Validate that cookie looks like a real session cookie
-    if (!leetcodeSessionCookie.includes('=') || leetcodeSessionCookie.length < 20) {
+    const isValidCookie = leetcodeSessionCookie.length >= 20 && (
+        leetcodeSessionCookie.includes('=') || 
+        leetcodeSessionCookie.startsWith('eyJ')
+    );
+    if (!isValidCookie) {
         return next(new AppError('Invalid session cookie format', 400));
     }
 
