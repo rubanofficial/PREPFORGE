@@ -20,6 +20,7 @@ const DashboardPage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [problems, setProblems] = useState([]);
+    const [topTopics, setTopTopics] = useState([]);
     const [aiAnalysis, setAiAnalysis] = useState(null);
     
     // Get sync state from Redux
@@ -41,6 +42,9 @@ const DashboardPage = () => {
                     medium: breakdown.medium ?? 0,
                     hard: breakdown.hard ?? 0,
                 });
+
+                // Set topic tags
+                setTopTopics(statsData?.topTopics || []);
 
                 // Fetch user's problems (get recent history, use large limit)
                 const problemsPayload = await problemService.getProblems({ limit: 1000 });
@@ -109,6 +113,31 @@ const DashboardPage = () => {
                     colorClass="text-leetcodeHard"
                 />
             </div>
+
+            {/* SECTION: Topic Coverage */}
+            {topTopics.length > 0 && (
+                <div className="bg-surface border border-border rounded-lg p-6">
+                    <h3 className="text-sm font-semibold text-textMain uppercase tracking-wider mb-4">Topic Coverage</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                        {topTopics.map((topic, idx) => {
+                            const maxCount = topTopics[0]?.count || 1;
+                            const pct = Math.round((topic.count / maxCount) * 100);
+                            return (
+                                <div key={idx} className="relative bg-background rounded-lg border border-border p-3 overflow-hidden">
+                                    <div
+                                        className="absolute inset-0 bg-primary/10 rounded-lg"
+                                        style={{ width: `${pct}%` }}
+                                    />
+                                    <div className="relative z-10">
+                                        <p className="text-xs font-semibold text-primary truncate capitalize">{topic.name}</p>
+                                        <p className="text-lg font-bold text-textMain mt-1">{topic.count}</p>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* SECTION 4: AI Analysis */}

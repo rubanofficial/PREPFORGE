@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import leetcodeProvider from '../services/providers/leetcodeProvider.js';
 import leetcodeAuthProvider from '../services/providers/leetcodeAuthProvider.js';
 import { normalizeLeetcodeStats } from '../services/normalization/normalizeLeetcodeData.js';
@@ -9,6 +10,7 @@ import Problem from '../models/Problem.js';
 import SyncJob from '../models/SyncJob.js';
 import User from '../models/User.js';
 import { asyncHandler, AppError } from '../utils/errorHandler.js';
+import { analyzeUserPerformance } from '../services/geminiAnalysisService.js';
 
 /**
  * POST /api/leetcode/sync
@@ -608,9 +610,13 @@ const getSyncStatus = asyncHandler(async (req, res, next) => {
 const getLeetCodeStats = asyncHandler(async (req, res) => {
     const userId = req.user.userId;
 
+    // IMPORTANT: aggregate() does NOT auto-cast strings to ObjectId like find() does.
+    // The Problem model stores userId as ObjectId, so we must convert explicitly.
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
     // Get difficulty breakdown
     const difficultyStats = await Problem.aggregate([
-        { $match: { userId } },
+        { $match: { userId: userObjectId } },
         {
             $group: {
                 _id: '$difficulty',
@@ -622,7 +628,7 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
 
     // Get top topics
     const topicStats = await Problem.aggregate([
-        { $match: { userId } },
+        { $match: { userId: userObjectId } },
         { $unwind: '$topics' },
         {
             $group: {
@@ -655,6 +661,43 @@ const getLeetCodeStats = asyncHandler(async (req, res) => {
             }))
         }
     });
+});
+
+/**
+ * GET /api/leetcode/ai-analysis
+ * Generate and return AI-powered performance analysis for user
+ */
+const getAIAnalysis = asyncHandler(async (req, res, next) => {
+    const userId = req.user.userId;
+
+    try {
+        console.log(`\n${'='.repeat(70)}`);
+        console.log(`🤖 AI ANALYSIS: Generating performance analysis for user ${userId}`);
+        console.log(`${'='.repeat(70)}\n`);
+
+        const analysisResult = await analyzeUserPerformance(userId);
+
+        if (!analysisResult || analysisResult.success === false) {
+            // Return 404 if no problems solved yet, which triggers the frontend "no data" page
+            return next(new AppError(
+                analysisResult?.message || 'No problems solved yet. Sync problems first to get AI analysis.',
+                404
+            ));
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'AI analysis completed',
+            data: {
+                ...analysisResult.analysis,
+                metrics: analysisResult.performanceMetrics,
+                timestamp: new Date()
+            }
+        });
+    } catch (error) {
+        console.error(`❌ AI Analysis failed:`, error.message);
+        return next(new AppError(`AI Analysis failed: ${error.message}`, 500));
+    }
 });
 
 /**
@@ -861,5 +904,6 @@ export {
     startBackgroundSync,
     getSyncStatus,
     getUserProblems,
-    getLeetCodeStats
+    getLeetCodeStats,
+    getAIAnalysis
 };

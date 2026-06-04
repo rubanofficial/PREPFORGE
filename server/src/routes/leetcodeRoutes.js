@@ -7,7 +7,8 @@ import {
     startBackgroundSync,
     getSyncStatus,
     getUserProblems,
-    getLeetCodeStats
+    getLeetCodeStats,
+    getAIAnalysis
 } from '../controllers/leetcodeController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -60,5 +61,9 @@ router.get('/problems', protect, getUserProblems);
 // GET /api/leetcode/stats - Get user's problem-solving statistics
 // Protected route: requires authentication
 router.get('/stats', protect, getLeetCodeStats);
+
+// GET /api/leetcode/ai-analysis - Get AI-powered performance analysis
+// Protected route: requires authentication
+router.get('/ai-analysis', protect, getAIAnalysis);
 
 export default router;
