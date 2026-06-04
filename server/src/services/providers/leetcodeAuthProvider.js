@@ -124,9 +124,21 @@ async function initializeAuthenticatedConnection(encryptedSession) {
  */
 /**
  * GraphQL query for fetching submissions
- * This is the same query the leetcode-query library uses internally,
- * but we call it directly to avoid the library's internal crash when
- * data.submissionList.submissions is null/undefined.
+ * 
+ * BREAKING CHANGE (LeetCode API):
+ * - The "question" field was removed from SubmissionDumpNode
+ * - Previously returned difficulty and topics
+ * - Now: Fetch submission metadata separately using fetchProblemDetail()
+ * 
+ * NEW FLOW:
+ * 1. Fetch submissions (basic data only)
+ * 2. For each titleSlug, fetch problem details separately
+ * 3. Merge submission + problem metadata before inserting to MongoDB
+ * 
+ * RATIONALE:
+ * - Two-step approach allows for metadata caching
+ * - Can batch metadata fetches (10 concurrent)
+ * - Reduces API load on LeetCode
  */
 const SUBMISSIONS_QUERY = `query ($offset: Int!, $limit: Int!, $slug: String) {
     submissionList(offset: $offset, limit: $limit, questionSlug: $slug) {
@@ -143,13 +155,6 @@ const SUBMISSIONS_QUERY = `query ($offset: Int!, $limit: Int!, $slug: String) {
             title
             memory
             titleSlug
-            question {
-                difficulty
-                topics {
-                    slug
-                    name
-                }
-            }
         }
     }
 }`;
@@ -482,6 +487,25 @@ async function fetchUserProfile(leetcodeClient, username) {
 /**
  * Fetch problem details including difficulty
  * 
+ * IMPORTANT: Uses leetcodeClient.graphql() method (NOT query()).
+ * The leetcode-query library provides the graphql() method for all GraphQL queries.
+ * 
+ * Response structure (from LeetCode GraphQL):
+ * {
+ *     data: {
+ *         question: {
+ *             difficulty: "Easy",
+ *             title: "Two Sum",
+ *             titleSlug: "two-sum",
+ *             topicTags: [{slug: "array", name: "Array"}, ...]
+ *         }
+ *     },
+ *     errors: [] (if any)
+ * }
+ * 
+ * NOTE: The returned object maps `topicTags` → `topics` to maintain
+ * backward compatibility with all downstream consumers.
+ * 
  * @param {LeetCode} leetcodeClient - Authenticated LeetCode client
  * @param {string} titleSlug - Problem slug (e.g., "two-sum")
  * @returns {Promise<{problem: Object, error: null} | {problem: null, error: Object}>}
@@ -492,7 +516,7 @@ async function fetchProblemDetail(leetcodeClient, titleSlug) {
             difficulty
             title
             titleSlug
-            topics {
+            topicTags {
                 slug
                 name
             }
@@ -513,9 +537,75 @@ async function fetchProblemDetail(leetcodeClient, titleSlug) {
 
         console.log(`🔍 Fetching problem details for slug: "${titleSlug}"`);
 
-        const result = await leetcodeClient.query(QUESTION_QUERY, { titleSlug });
+        // DEBUG: Log available methods on leetcodeClient (first call only)
+        if (global._debugLeetcodeClientMethods === undefined) {
+            global._debugLeetcodeClientMethods = true;
+            console.log(`📊 DEBUG: Available methods on leetcodeClient:`,
+                Object.getOwnPropertyNames(Object.getPrototypeOf(leetcodeClient))
+                    .filter(m => typeof leetcodeClient[m] === 'function')
+                    .join(', ')
+            );
+        }
 
-        if (!result || !result.question) {
+        // Use graphql() method (same as fetchSubmissions)
+        const response = await leetcodeClient.graphql({
+            variables: { titleSlug },
+            query: QUESTION_QUERY,
+        });
+
+        console.log(`✅ GraphQL response received for problem: ${titleSlug}`);
+
+        // Check for GraphQL errors
+        if (response.errors && response.errors.length > 0) {
+            const errorMsg = response.errors.map(e => e.message).join('; ');
+            console.error(`❌ GraphQL errors for ${titleSlug}: ${errorMsg}`);
+
+            // Check if it's an auth error
+            const isAuthError = response.errors.some(e =>
+                e.message?.toLowerCase().includes('unauthorized') ||
+                e.message?.toLowerCase().includes('not logged in') ||
+                e.message?.toLowerCase().includes('authentication')
+            );
+
+            if (isAuthError) {
+                return {
+                    problem: null,
+                    error: {
+                        type: 'AUTHENTICATION_FAILED',
+                        message: `LeetCode session expired: ${errorMsg}`,
+                        recoverable: false,
+                    },
+                };
+            }
+
+            return {
+                problem: null,
+                error: {
+                    type: 'GRAPHQL_ERROR',
+                    message: `GraphQL error: ${errorMsg}`,
+                    recoverable: true,
+                },
+            };
+        }
+
+        // Extract data from response
+        const data = response.data;
+
+        if (!data) {
+            console.warn(`⚠️  No data in GraphQL response for ${titleSlug}`);
+            return {
+                problem: null,
+                error: {
+                    type: 'NO_DATA',
+                    message: 'GraphQL response has no data field',
+                    recoverable: true,
+                },
+            };
+        }
+
+        const question = data.question;
+
+        if (!question) {
             console.warn(`⚠️  Problem not found: "${titleSlug}"`);
             return {
                 problem: null,
@@ -527,12 +617,43 @@ async function fetchProblemDetail(leetcodeClient, titleSlug) {
             };
         }
 
+        // DEBUG: Log raw GraphQL response to inspect actual schema
+        console.log(`🔍 Question Metadata:`, JSON.stringify(question, null, 2));
+
+        console.log(`✅ Problem details fetched: ${question.title} (difficulty: ${question.difficulty})`);
+
+        // Map topicTags → topics for backward compatibility with downstream consumers
+        // (problemMetadataService, problemEnrichmentService, deepSyncService all expect .topics)
         return {
-            problem: result.question,
+            problem: {
+                ...question,
+                topics: question.topicTags || [],
+            },
             error: null,
         };
     } catch (error) {
-        console.error(`❌ Failed to fetch problem detail for "${titleSlug}":`, error.message);
+        console.error(`❌ EXCEPTION in fetchProblemDetail for "${titleSlug}":`);
+        console.error(`   Error Type: ${error.constructor.name}`);
+        console.error(`   Error Message: ${error.message}`);
+        console.error(`   Stack: ${error.stack?.substring(0, 200)}`);
+
+        // Check for authentication errors
+        if (
+            error.message.includes('Unauthorized') ||
+            error.message.includes('401') ||
+            error.message.includes('authentication') ||
+            error.message.includes('session')
+        ) {
+            return {
+                problem: null,
+                error: {
+                    type: 'AUTHENTICATION_FAILED',
+                    message: 'LeetCode session expired or invalid.',
+                    recoverable: false,
+                },
+            };
+        }
+
         return {
             problem: null,
             error: {

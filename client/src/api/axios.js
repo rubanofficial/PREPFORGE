@@ -30,11 +30,13 @@ api.interceptors.response.use(
     },
     (error) => {
         if (error.response && error.response.status === 401) {
-            // Handle unauthorized error (clear token, redirect, etc.)
-            localStorage.removeItem('token');
-            // We can dispatch a logout action here if we inject the store, 
-            // but for now relying on protected routes to kick them out
-            window.location.href = '/login';
+            const url = error.config?.url || '';
+            const isAuthRoute = url.includes('/auth/login') || url.includes('/auth/register');
+            if (!isAuthRoute) {
+                // Handle unauthorized error (clear token, redirect, etc.)
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+            }
         }
         return Promise.reject(error);
     }

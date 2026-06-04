@@ -1,4 +1,5 @@
 import leetcodeAuthProvider from '../providers/leetcodeAuthProvider.js';
+import problemMetadataService from '../enrichment/problemMetadataService.js';
 import Problem from '../../models/Problem.js';
 import SyncJob from '../../models/SyncJob.js';
 
@@ -136,21 +137,20 @@ const MAX_BATCHES = 3000; // 3000 * 20 = 60,000 max problems per sync
 /**
  * Normalize a single submission into Problem document
  * 
- * @param {Object} submission - LeetCode submission object
+ * @param {Object} submission - LeetCode submission object (may include enriched metadata)
  * @param {string} userId - User ID (MongoDB)
  * @returns {Object|null} Normalized problem document or null if invalid
  * 
  * NORMALIZATION:
- * - Extract only required fields
+ * - Extract only required fields (title, titleSlug, timestamp)
+ * - Include optional enriched fields (difficulty, topics, language)
  * - Convert timestamps to Date objects
  * - Validate required fields
- * - Preserve optional fields if available
  * 
- * WHY NORMALIZE?
- * - LeetCode API response format may change
- * - We need consistent schema in database
- * - Removes unnecessary data
- * - Prevents storing raw API responses
+ * IMPORTANT: This function now receives enriched submissions that already include:
+ * - difficulty (from ProblemMetadata cache/API)
+ * - topics (from ProblemMetadata cache/API)
+ * - language (from original submission)
  */
 function normalizeSubmission(submission, userId) {
     try {
@@ -162,6 +162,8 @@ function normalizeSubmission(submission, userId) {
         //   timestamp: 1234567890,
         //   statusDisplay: "Accepted",
         //   lang: "python",
+        //   difficulty: "Easy" (enriched)
+        //   topics: ["array", "hash-table"] (enriched)
         //   ...
         // }
 
@@ -189,19 +191,21 @@ function normalizeSubmission(submission, userId) {
             userId,
         };
 
-        // Optional: add language if available
-        if (submission.lang) {
-            problemDoc.language = submission.lang.toLowerCase();
-        }
-
-        // Optional: add difficulty if available
+        // Optional: add difficulty (from enriched metadata)
         if (submission.difficulty) {
             problemDoc.difficulty = submission.difficulty;
         }
 
-        // Optional: add topics if available
+        // Optional: add topics (from enriched metadata)
         if (Array.isArray(submission.topics) && submission.topics.length > 0) {
-            problemDoc.topics = submission.topics.map((t) => t.toLowerCase());
+            problemDoc.topics = submission.topics.map((t) =>
+                typeof t === 'string' ? t.toLowerCase() : t
+            );
+        }
+
+        // Optional: add language from original submission
+        if (submission.lang) {
+            problemDoc.language = submission.lang.toLowerCase();
         }
 
         return problemDoc;
@@ -395,7 +399,9 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         let totalInserted = 0;
         let totalDuplicates = 0;
         let totalFailed = 0;
+        let totalSubmissionsProcessed = 0; // Track total submissions for failure detection
         let consecutiveFailures = 0; // Track consecutive failures
+        let allSubmissions = []; // Collect ALL submissions for batch metadata enrichment
 
         while (batchCount < MAX_BATCHES) {
             batchCount++;
@@ -451,35 +457,17 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             // Reset consecutive failure counter on successful fetch
             consecutiveFailures = 0;
 
-            // Step 3: Process batch
-            const batchMetrics = await processBatch(submissions, userId, syncJob);
+            // Collect submissions for metadata enrichment
+            if (submissions && submissions.length > 0) {
+                allSubmissions.push(...submissions);
+                totalSubmissionsProcessed += submissions.length;
+            }
 
-            // Step 4: Update metrics
-            syncJob.progress.batchesProcessed = batchCount;
-            syncJob.progress.processed += batchMetrics.normalized;
-            syncJob.progress.inserted += batchMetrics.inserted;
-            syncJob.progress.duplicates += batchMetrics.duplicates;
-            syncJob.progress.failed += batchMetrics.failed;
-            syncJob.metadata.lastBatchSize = submissions.length;
-            syncJob.metadata.lastBatchSkip = offset;
-            syncJob.metadata.lastBatchAt = new Date();
+            console.log(`   ✅ Fetched ${submissions.length} submissions (hasMore: ${hasMore})`);
 
-            totalInserted += batchMetrics.inserted;
-            totalDuplicates += batchMetrics.duplicates;
-            totalFailed += batchMetrics.failed;
-
-            console.log(`   ✅ Batch complete:`);
-            console.log(`      Normalized: ${batchMetrics.normalized}`);
-            console.log(`      Inserted: ${batchMetrics.inserted}`);
-            console.log(`      Duplicates: ${batchMetrics.duplicates}`);
-            console.log(`      Failed: ${batchMetrics.failed}`);
-
-            // Save progress
-            await syncJob.save();
-
-            // Step 5: Check if more submissions exist
+            // Step 3b: Check if more submissions exist
             if (!hasMore || submissions.length === 0) {
-                console.log(`\n✅ No more submissions. Sync complete.`);
+                console.log(`\n✅ No more submissions from API. Processing metadata enrichment...`);
                 break;
             }
 
@@ -487,10 +475,97 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             offset += BATCH_SIZE;
         }
 
+        // CRITICAL FIX: Check if we fetched ANY submissions
+        if (totalSubmissionsProcessed === 0) {
+            console.warn(`\n⚠️  WARNING: Zero submissions processed from LeetCode API`);
+            syncJob.status = 'failed';
+            syncJob.error = {
+                message: 'No submissions returned from LeetCode API. Session may be invalid or user has no solved problems.',
+                code: 'ZERO_SUBMISSIONS',
+                timestamp: new Date(),
+            };
+            await syncJob.save();
+            console.error(`❌ SYNC FAILED: Zero submissions processed`);
+            return null;
+        }
+
+        // Step 4: Batch fetch metadata for all unique titleSlugs
+        console.log(`\n${'='.repeat(70)}`);
+        console.log(`🔍 METADATA ENRICHMENT PHASE`);
+        console.log(`   Total submissions to enrich: ${totalSubmissionsProcessed}`);
+        console.log(`${'='.repeat(70)}`);
+
+        // Extract unique titleSlugs
+        const uniqueSlugs = [...new Set(allSubmissions.map(s => s.titleSlug))];
+        console.log(`   Unique problems: ${uniqueSlugs.length}`);
+
+        // Batch fetch metadata with controlled concurrency
+        const { success: metadataSuccess, metadata: metadataMap, stats: metadataStats, authFailed } =
+            await problemMetadataService.batchFetchMetadata(leetcode, uniqueSlugs);
+
+        // Check for auth failures during metadata fetch
+        if (authFailed) {
+            syncJob.status = 'failed';
+            syncJob.error = {
+                message: 'Authentication failed during metadata enrichment phase',
+                code: 'AUTH_FAILED_METADATA',
+                timestamp: new Date(),
+            };
+            await syncJob.save();
+            console.error(`❌ Auth failed during metadata fetch. Stopping sync.`);
+            return null;
+        }
+
+        // Enrich submissions with metadata
+        const enrichedSubmissions = problemMetadataService.enrichSubmissionsWithMetadata(
+            allSubmissions,
+            metadataMap
+        );
+
+        console.log(`\n✅ Enrichment complete - Starting database insertion...`);
+
+        // Step 5: Process enriched submissions in batches
+        const INSERTION_BATCH_SIZE = 50; // Insert 50 at a time
+        for (let i = 0; i < enrichedSubmissions.length; i += INSERTION_BATCH_SIZE) {
+            const insertBatch = enrichedSubmissions.slice(i, i + INSERTION_BATCH_SIZE);
+            const insertBatchNum = Math.floor(i / INSERTION_BATCH_SIZE) + 1;
+            const insertTotalBatches = Math.ceil(enrichedSubmissions.length / INSERTION_BATCH_SIZE);
+
+            const batchMetrics = await processBatch(insertBatch, userId, syncJob);
+
+            syncJob.progress.batchesProcessed = insertBatchNum;
+            syncJob.progress.processed += batchMetrics.normalized;
+            syncJob.progress.inserted += batchMetrics.inserted;
+            syncJob.progress.duplicates += batchMetrics.duplicates;
+            syncJob.progress.failed += batchMetrics.failed;
+
+            totalInserted += batchMetrics.inserted;
+            totalDuplicates += batchMetrics.duplicates;
+            totalFailed += batchMetrics.failed;
+
+            console.log(`   Insertion batch ${insertBatchNum}/${insertTotalBatches} - Inserted: ${batchMetrics.inserted}, Duplicates: ${batchMetrics.duplicates}, Failed: ${batchMetrics.failed}`);
+
+            await syncJob.save();
+        }
+
+        // CRITICAL FIX: Verify we actually inserted something
+        if (totalInserted === 0 && totalDuplicates === 0) {
+            console.error(`\n❌ SYNC FAILED: No problems were inserted or found as duplicates`);
+            syncJob.status = 'failed';
+            syncJob.error = {
+                message: 'No problems were successfully inserted. All submissions may have failed processing.',
+                code: 'ZERO_INSERTIONS',
+                timestamp: new Date(),
+            };
+            await syncJob.save();
+            return null;
+        }
+
         // Step 6: Mark as completed
         syncJob.status = 'completed';
         syncJob.completedAt = new Date();
         syncJob.metadata.totalDuration = Date.now() - startTime;
+        syncJob.metadata.metadataStats = metadataStats;
 
         await syncJob.save();
 
@@ -499,6 +574,9 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         console.log(`   Total Inserted: ${totalInserted}`);
         console.log(`   Total Duplicates: ${totalDuplicates}`);
         console.log(`   Total Failed: ${totalFailed}`);
+        console.log(`   Metadata Cached: ${metadataStats.cached}`);
+        console.log(`   Metadata Fetched: ${metadataStats.fetched}`);
+        console.log(`   Metadata Failed: ${metadataStats.failed}`);
         console.log(`   Duration: ${Date.now() - startTime}ms`);
         console.log(`${'='.repeat(70)}\n`);
 
@@ -510,6 +588,7 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
                 duplicates: totalDuplicates,
                 failed: totalFailed,
                 processed: syncJob.progress.processed,
+                metadataStats,
             },
         };
     } catch (error) {

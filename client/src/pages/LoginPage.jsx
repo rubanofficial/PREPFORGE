@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, Link } from 'react-router-dom';
 import { Code2, ArrowRight } from 'lucide-react';
 import { loginStart, loginSuccess, loginFailure } from '../features/auth/authSlice';
@@ -10,6 +10,7 @@ const LoginPage = () => {
     const [password, setPassword] = useState('');
     const dispatch = useDispatch();
     const navigate = useNavigate();
+    const { loading, error } = useSelector((state) => state.auth);
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -51,6 +52,11 @@ const LoginPage = () => {
 
             <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
                 <div className="bg-surface py-8 px-4 shadow-xl border border-border sm:rounded-lg sm:px-10">
+                    {error && (
+                        <div className="mb-4 p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-400 text-sm text-center">
+                            {error}
+                        </div>
+                    )}
                     <form className="space-y-6" onSubmit={handleLogin}>
                         <div>
                             <label className="block text-sm font-medium text-textMuted mb-1">Email address</label>
@@ -77,9 +83,10 @@ const LoginPage = () => {
                         <div>
                             <button
                                 type="submit"
-                                className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none"
+                                disabled={loading}
+                                className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primaryHover transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Sign in <ArrowRight size={16} />
+                                {loading ? 'Signing in...' : <>Sign in <ArrowRight size={16} /></>}
                             </button>
                         </div>
                     </form>

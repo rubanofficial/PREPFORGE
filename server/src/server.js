@@ -11,18 +11,23 @@ dotenv.config()
 
 const app = express()
 const httpServer = createServer(app)
+
+// Parse CORS origins from environment variable
+const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+    : ['http://localhost:5173']
+
+const corsOptions = {
+    origin: corsOrigins,
+    credentials: true,
+}
+
 const io = new SocketServer(httpServer, {
-    cors: {
-        origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-        credentials: true,
-    },
+    cors: corsOptions,
 })
 
 // Middleware
-app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-    credentials: true,
-}))
+app.use(cors(corsOptions))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 

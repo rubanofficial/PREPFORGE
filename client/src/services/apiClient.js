@@ -39,8 +39,14 @@ apiClient.interceptors.response.use(
         });
 
         if (error.response?.status === 401) {
-            localStorage.removeItem('token')
-            window.location.href = '/login'
+            // Don't redirect on login/register 401s — those are "wrong credentials" errors,
+            // not "session expired" errors. Let the calling code handle the error message.
+            const url = error.config?.url || ''
+            const isAuthRoute = url.includes('/auth/login') || url.includes('/auth/register')
+            if (!isAuthRoute) {
+                localStorage.removeItem('token')
+                window.location.href = '/login'
+            }
         }
         return Promise.reject(error)
     }
