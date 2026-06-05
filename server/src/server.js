@@ -6,6 +6,7 @@ import { Server as SocketServer } from 'socket.io'
 import connectDB from './config/database.js'
 import authRoutes from './routes/authRoutes.js'
 import leetcodeRoutes from './routes/leetcodeRoutes.js'
+import { setIO } from './socketManager.js'
 
 dotenv.config()
 
@@ -25,6 +26,9 @@ const corsOptions = {
 const io = new SocketServer(httpServer, {
     cors: corsOptions,
 })
+
+// Register io in socketManager so services can emit without circular imports
+setIO(io)
 
 // Middleware
 app.use(cors(corsOptions))
@@ -48,6 +52,15 @@ app.use('/api/leetcode', leetcodeRoutes)
 // Socket.io connection
 io.on('connection', (socket) => {
     console.log(`New client connected: ${socket.id}`)
+
+    // Client emits this right after connecting so we can route sync events
+    // to the correct user's private room (keyed by userId string).
+    socket.on('join-user-room', (userId) => {
+        if (userId && typeof userId === 'string') {
+            socket.join(userId)
+            console.log(`🔌 Socket ${socket.id} joined room: ${userId}`)
+        }
+    })
 
     socket.on('disconnect', () => {
         console.log(`Client disconnected: ${socket.id}`)

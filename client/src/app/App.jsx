@@ -11,10 +11,23 @@ import ProblemsPage from '../pages/ProblemsPage';
 import AnalyticsPage from '../pages/AnalyticsPage';
 import SettingsPage from '../pages/SettingsPage';
 import ProtectedRoute from '../components/ProtectedRoute';
+import { useSyncSocket } from '../hooks/useSyncSocket';
+
+/**
+ * SyncSocketProvider mounts inside <Provider> so it has Redux access.
+ * It activates the socket listener for the entire authenticated session
+ * without being tied to any single page/route.
+ */
+function SyncSocketProvider() {
+    useSyncSocket();
+    return null;
+}
 
 function App() {
     return (
         <Provider store={store}>
+            {/* Mounts socket listener for the entire session — no page dependency */}
+            <SyncSocketProvider />
             <Router>
                 <Routes>
                     {/* Public Routes */}

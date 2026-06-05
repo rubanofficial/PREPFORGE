@@ -2,6 +2,7 @@ import leetcodeAuthProvider from '../providers/leetcodeAuthProvider.js';
 import problemMetadataService from '../enrichment/problemMetadataService.js';
 import Problem from '../../models/Problem.js';
 import SyncJob from '../../models/SyncJob.js';
+import { getIO } from '../../socketManager.js';
 
 /**
  * DEEP SYNC SERVICE
@@ -393,6 +394,25 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         console.log(`   Username: ${profile.username || 'N/A'}`);
         console.log(`   Real Name: ${profile.realName || 'N/A'}`);
 
+        // Try to extract total expected submissions to show accurate progress percentage
+        let totalExpected = 0;
+        try {
+            if (profile.matchedUser?.submitStatsGlobal?.acSubmissionNum) {
+                const allStats = profile.matchedUser.submitStatsGlobal.acSubmissionNum.find(s => s.difficulty === 'All');
+                if (allStats && allStats.count) {
+                    totalExpected = allStats.count;
+                }
+            }
+        } catch (e) {
+            console.log(`⚠️  Could not extract total expected count from profile`);
+        }
+
+        if (totalExpected > 0) {
+            syncJob.progress.totalExpected = totalExpected;
+            await syncJob.save();
+            console.log(`   Total expected solved problems: ${totalExpected}`);
+        }
+
         // Step 3: Start pagination loop
         let offset = 0;
         let batchCount = 0;
@@ -432,6 +452,11 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
                         timestamp: new Date(),
                     };
                     await syncJob.save();
+                    getIO()?.to(userId.toString()).emit('sync-failed', {
+                        status: 'failed',
+                        error: fetchError.message,
+                        progressPercent: 0,
+                    });
                     console.error(`❌ Non-recoverable error. Stopping sync.`);
                     break;
                 }
@@ -445,6 +470,11 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
                         timestamp: new Date(),
                     };
                     await syncJob.save();
+                    getIO()?.to(userId.toString()).emit('sync-failed', {
+                        status: 'failed',
+                        error: `Too many consecutive fetch failures: ${fetchError.message}`,
+                        progressPercent: 0,
+                    });
                     console.error(`❌ 3 consecutive failures. Stopping sync.`);
                     break;
                 }
@@ -461,6 +491,27 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             if (submissions && submissions.length > 0) {
                 allSubmissions.push(...submissions);
                 totalSubmissionsProcessed += submissions.length;
+
+                // Progressively update fetched progress
+                syncJob.progress.processed = totalSubmissionsProcessed;
+                await syncJob.save();
+
+                // Emit real-time fetch progress via Socket.io
+                const fetchPercent = syncJob.progress.totalExpected > 0
+                    ? Math.min(Math.round((totalSubmissionsProcessed / syncJob.progress.totalExpected) * 50), 50)
+                    : 0; // first 50% = fetching phase
+                getIO()?.to(userId.toString()).emit('sync-progress', {
+                    status: 'active',
+                    phase: 'fetching',
+                    progress: {
+                        expectedProblems: syncJob.progress.totalExpected,
+                        fetchedFromProvider: totalSubmissionsProcessed,
+                        insertedToDatabase: syncJob.progress.inserted,
+                        duplicatesSkipped: syncJob.progress.duplicates,
+                        failedToProcess: syncJob.progress.failed,
+                    },
+                    progressPercent: fetchPercent,
+                });
             }
 
             console.log(`   ✅ Fetched ${submissions.length} submissions (hasMore: ${hasMore})`);
@@ -534,7 +585,6 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             const batchMetrics = await processBatch(insertBatch, userId, syncJob);
 
             syncJob.progress.batchesProcessed = insertBatchNum;
-            syncJob.progress.processed += batchMetrics.normalized;
             syncJob.progress.inserted += batchMetrics.inserted;
             syncJob.progress.duplicates += batchMetrics.duplicates;
             syncJob.progress.failed += batchMetrics.failed;
@@ -546,6 +596,21 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             console.log(`   Insertion batch ${insertBatchNum}/${insertTotalBatches} - Inserted: ${batchMetrics.inserted}, Duplicates: ${batchMetrics.duplicates}, Failed: ${batchMetrics.failed}`);
 
             await syncJob.save();
+
+            // Emit real-time insertion progress (second 50% of progress bar)
+            const insertPercent = 50 + Math.round((insertBatchNum / insertTotalBatches) * 50);
+            getIO()?.to(userId.toString()).emit('sync-progress', {
+                status: 'active',
+                phase: 'inserting',
+                progress: {
+                    expectedProblems: syncJob.progress.totalExpected,
+                    fetchedFromProvider: syncJob.progress.processed,
+                    insertedToDatabase: syncJob.progress.inserted,
+                    duplicatesSkipped: syncJob.progress.duplicates,
+                    failedToProcess: syncJob.progress.failed,
+                },
+                progressPercent: Math.min(insertPercent, 99),
+            });
         }
 
         // CRITICAL FIX: Verify we actually inserted something
@@ -568,6 +633,19 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         syncJob.metadata.metadataStats = metadataStats;
 
         await syncJob.save();
+
+        // Emit completion event
+        getIO()?.to(userId.toString()).emit('sync-complete', {
+            status: 'completed',
+            progress: {
+                expectedProblems: syncJob.progress.totalExpected,
+                fetchedFromProvider: syncJob.progress.processed,
+                insertedToDatabase: totalInserted,
+                duplicatesSkipped: totalDuplicates,
+                failedToProcess: totalFailed,
+            },
+            progressPercent: 100,
+        });
 
         console.log(`\n${'='.repeat(70)}`);
         console.log(`✅ DEEP SYNC COMPLETED`);
@@ -601,6 +679,13 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             timestamp: new Date(),
         };
         await syncJob.save();
+
+        // Emit failure event
+        getIO()?.to(userId.toString()).emit('sync-failed', {
+            status: 'failed',
+            error: error.message,
+            progressPercent: 0,
+        });
 
         return null;
     }

@@ -1,73 +1,28 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import SyncProgressCard from '../components/UI/SyncProgressCard';
 import { Database, AlertTriangle } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
-import { startSync, updateSyncStatus, clearSyncState } from '../features/sync/syncSlice';
+import { startSync, updateSyncStatus } from '../features/sync/syncSlice';
 import leetcodeService from '../services/leetcodeService';
-
-const POLL_INTERVAL = 2000; // ms
 
 const SyncPage = () => {
     const dispatch = useDispatch();
-    const { status, progressPercent, progress, currentJobId } = useSelector((state) => state.sync);
-    const pollingRef = useRef(null);
-    const [starting, setStarting] = useState(false);
-
-    useEffect(() => {
-        return () => {
-            // cleanup on unmount
-            if (pollingRef.current) clearInterval(pollingRef.current);
-            dispatch(clearSyncState());
-        };
-    }, [dispatch]);
-
-    const pollStatus = async (jobId) => {
-        try {
-            const res = await leetcodeService.getSyncStatus(jobId);
-            if (res && res.data) {
-                const { status: s, progress: p, progressPercent: pp, error } = res.data;
-                dispatch(updateSyncStatus({ status: s, progress: p, progressPercent: pp, error }));
-
-                if (s === 'completed' || s === 'failed') {
-                    if (pollingRef.current) {
-                        clearInterval(pollingRef.current);
-                        pollingRef.current = null;
-                    }
-                    setStarting(false);
-                }
-            }
-        } catch (err) {
-            console.error('Failed to poll sync status', err.message || err);
-            dispatch(updateSyncStatus({ status: 'failed', error: err.message || 'Polling failed' }));
-            if (pollingRef.current) {
-                clearInterval(pollingRef.current);
-                pollingRef.current = null;
-            }
-            setStarting(false);
-        }
-    };
+    const { status, progressPercent, progress } = useSelector((state) => state.sync);
 
     const handleStartSync = async () => {
-        setStarting(true);
         try {
             // Start authenticated deep sync (backend will verify stored session)
             const res = await leetcodeService.startDeepSync();
             if (res && res.data && res.data.syncJobId) {
                 const jobId = res.data.syncJobId;
                 dispatch(startSync(jobId));
-
-                // Immediately poll once then set interval
-                await pollStatus(jobId);
-                pollingRef.current = setInterval(() => pollStatus(jobId), POLL_INTERVAL);
             } else {
                 // Unexpected response
                 dispatch(updateSyncStatus({ status: 'failed', error: res?.message || 'Failed to start sync' }));
-                setStarting(false);
             }
         } catch (err) {
             console.error('Failed to start deep sync', err.message || err);
             dispatch(updateSyncStatus({ status: 'failed', error: err?.response?.data?.message || err.message || 'Start sync failed' }));
-            setStarting(false);
         }
     };
 

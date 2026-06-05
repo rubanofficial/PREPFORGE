@@ -22,6 +22,15 @@ const syncSlice = createSlice({
             state.status = 'pending';
             state.currentJobId = action.payload;
             state.error = null;
+            // Reset progress so bar always starts from 0 on a new sync
+            state.progressPercent = 0;
+            state.progress = {
+                expectedProblems: 0,
+                fetchedFromProvider: 0,
+                insertedToDatabase: 0,
+                duplicatesSkipped: 0,
+                failedToProcess: 0,
+            };
         },
         updateSyncStatus: (state, action) => {
             const { status, progress, progressPercent, error } = action.payload;

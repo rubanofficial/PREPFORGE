@@ -6,9 +6,13 @@ import Navbar from '../components/Navbar';
 import authService from '../services/authService';
 import { setUser, logout } from '../features/auth/authSlice';
 
+
 const MainLayout = () => {
     const dispatch = useDispatch();
     const { token, user } = useSelector((state) => state.auth);
+
+    // Socket-based sync progress is handled globally in App.jsx via useSyncSocket
+
 
     useEffect(() => {
         let cancelled = false;

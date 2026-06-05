@@ -80,3 +80,9 @@ select {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--surface-hover);
 }
+
+/* Indeterminate progress bar animation (used in SyncProgressCard pending state) */
+@keyframes slide-indeterminate {
+  0%   { left: -33%; }
+  100% { left: 100%; }
+}

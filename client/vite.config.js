@@ -9,8 +9,14 @@ export default defineConfig({
             '/api': {
                 target: 'http://localhost:5000',
                 changeOrigin: true,
-                // Do not rewrite the path; forward '/api/*' as-is to backend
+            },
+            // Proxy Socket.io WebSocket connections to the Express server
+            '/socket.io': {
+                target: 'http://localhost:5000',
+                changeOrigin: true,
+                ws: true,           // ← upgrade HTTP → WebSocket
             }
         }
     }
 })
+
