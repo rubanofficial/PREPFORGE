@@ -34,10 +34,22 @@ const syncSlice = createSlice({
         },
         updateSyncStatus: (state, action) => {
             const { status, progress, progressPercent, error } = action.payload;
-            state.status = status;
+
+            if (status) state.status = status;
             if (progress) state.progress = progress;
-            if (progressPercent !== undefined) state.progressPercent = progressPercent;
             if (error) state.error = error;
+
+            // Monotonic progressPercent rule:
+            //   - completed → always 100 (even if payload says something else)
+            //   - failed    → always 0
+            //   - otherwise → only increase, never decrease
+            if (status === 'completed') {
+                state.progressPercent = 100;
+            } else if (status === 'failed') {
+                state.progressPercent = 0;
+            } else if (progressPercent !== undefined && progressPercent > state.progressPercent) {
+                state.progressPercent = progressPercent;
+            }
         },
         clearSyncState: (state) => {
             return initialState;

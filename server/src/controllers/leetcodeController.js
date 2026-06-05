@@ -553,13 +553,29 @@ const getSyncStatus = asyncHandler(async (req, res, next) => {
 
         const elapsedSeconds = Math.round(elapsedMs / 1000);
 
-        // Calculate progress percentage (if we know total expected)
+        // Calculate progress percentage
+        // ─────────────────────────────────────────────────────────────────
+        // Rules:
+        //   completed → always 100  (even if totalExpected was never set)
+        //   failed    → always 0
+        //   active/pending → ratio of processed/totalExpected, capped at 99
+        //                    so the bar never falsely hits 100% before done
+        // ─────────────────────────────────────────────────────────────────
         let progressPercent = 0;
-        if (syncJob.progress.totalExpected > 0) {
-            progressPercent = Math.round(
-                (syncJob.progress.processed / syncJob.progress.totalExpected) * 100
-            );
+        if (syncJob.status === 'completed') {
+            progressPercent = 100;
+        } else if (syncJob.status !== 'failed') {
+            const { totalExpected, processed } = syncJob.progress;
+            if (totalExpected > 0 && processed > 0) {
+                progressPercent = Math.min(
+                    Math.round((processed / totalExpected) * 100),
+                    99   // cap in-progress at 99% — only completed gets 100
+                );
+            }
         }
+
+        // Debug log — remove once confirmed working
+        console.log(`📊 Progress calc: status=${syncJob.status} processed=${syncJob.progress.processed} totalExpected=${syncJob.progress.totalExpected} → progressPercent=${progressPercent}`);
 
         console.log(`✅ Retrieved job status: ${syncJob.status}`);
 

@@ -8,9 +8,13 @@ import leetcodeService from '../services/leetcodeService';
  * useSyncSocket
  *
  * Primary: Listens for real-time Socket.io events emitted by deepSyncService.
- * Fallback: If the socket misses the final event (server restart, lost packet),
- *           polls once via REST 3 seconds after status goes to pending/active
- *           and every 5 seconds until terminal state.
+ * Fallback: REST polling every 5 seconds as a safety net for missed socket events.
+ *
+ * RACE-CONDITION FIX:
+ * The polling fallback can fire after the socket already set a higher
+ * progressPercent (e.g. 100% from sync-complete). To prevent a stale poll
+ * from overwriting a higher value, the dispatcher only updates progressPercent
+ * if the incoming value is >= the current value in Redux.
  *
  * EVENTS:
  *  - 'sync-progress'  → live progress update
@@ -18,11 +22,17 @@ import leetcodeService from '../services/leetcodeService';
  *  - 'sync-failed'    → dispatches status: 'failed'
  */
 export const useSyncSocket = () => {
-    const dispatch   = useDispatch();
-    const userId     = useSelector((state) => state.auth?.user?.userId);
-    const { currentJobId, status } = useSelector((state) => state.sync);
-    const pollRef    = useRef(null);
-    const isTerminal = status === 'completed' || status === 'failed' || status === 'idle';
+    const dispatch      = useDispatch();
+    const userId        = useSelector((state) => state.auth?.user?.userId);
+    const syncState     = useSelector((state) => state.sync);
+    const { currentJobId, status, progressPercent: currentPercent } = syncState;
+    const pollRef       = useRef(null);
+    const isTerminal    = status === 'completed' || status === 'failed' || status === 'idle';
+
+    // Keep a ref of the latest progressPercent so the poll closure always
+    // sees the current value without needing it as a dependency.
+    const currentPercentRef = useRef(currentPercent);
+    useEffect(() => { currentPercentRef.current = currentPercent; }, [currentPercent]);
 
     // ── Socket connection + listeners ─────────────────────────────────────
     useEffect(() => {
@@ -34,6 +44,8 @@ export const useSyncSocket = () => {
         const socket = socketService.socket;
         if (!socket) return;
 
+        // Always accept socket events — they come directly from the background
+        // worker and are the ground truth for real-time progress.
         const onProgress = ({ status: s, progress, progressPercent }) => {
             dispatch(updateSyncStatus({ status: s, progress, progressPercent }));
         };
@@ -58,8 +70,6 @@ export const useSyncSocket = () => {
     }, [userId, dispatch]);
 
     // ── Fallback REST polling (safety net) ────────────────────────────────
-    // Runs only when there's an active job and the socket might have missed
-    // the terminal event. Stops as soon as a terminal state is reached.
     useEffect(() => {
         const clearPoll = () => {
             if (pollRef.current) {
@@ -78,14 +88,28 @@ export const useSyncSocket = () => {
                 const res = await leetcodeService.getSyncStatus(currentJobId);
                 if (res?.data) {
                     const { status: s, progress: p, progressPercent: pp, error } = res.data;
-                    dispatch(updateSyncStatus({ status: s, progress: p, progressPercent: pp, error }));
+
+                    // RACE-CONDITION GUARD:
+                    // Only update progressPercent from polling if it is >= the
+                    // value already in Redux. This prevents a stale poll
+                    // (already in-flight when sync-complete fired) from
+                    // overwriting the correct 100%.
+                    const safePercent = (pp !== undefined && pp >= currentPercentRef.current)
+                        ? pp
+                        : currentPercentRef.current;
+
+                    dispatch(updateSyncStatus({
+                        status: s,
+                        progress: p,
+                        progressPercent: safePercent,
+                        error,
+                    }));
                 }
             } catch (err) {
                 console.warn('Fallback poll failed:', err.message);
             }
         };
 
-        // Start polling every 5 seconds as a safety net
         clearPoll();
         pollRef.current = setInterval(poll, 5000);
 
