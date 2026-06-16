@@ -1,103 +1,158 @@
 import leetcodeProvider from '../providers/leetcodeProvider.js';
-import { normalizeAcceptedProblems, buildProblemDocument } from '../normalization/normalizeAcceptedProblems.js';
+import { normalizeSubmission, buildProblemDocument } from '../normalization/normalizeAcceptedProblems.js';
 import Problem from '../../models/Problem.js';
 import SyncJob from '../../models/SyncJob.js';
+import User from '../../models/User.js';
+import { getIO } from '../../socketManager.js';
 
 /**
  * BACKGROUND SYNC SERVICE
  *
- * Handles background LeetCode syncing with batch processing.
+ * The Alfa LeetCode API returns ALL accepted submissions in ONE response
+ * (the skip/offset param is ignored — no real server-side pagination).
  *
- * ARCHITECTURE PHILOSOPHY:
- * - "YouTube Video Processing" style
- * - User clicks sync → immediate response
- * - Background worker processes independently
- * - Progress updates continuously
- * - Never blocks request lifecycle
- *
- * WHY BACKGROUND PROCESSING?
- * 1. SCALABILITY: Multiple users can sync simultaneously
- * 2. UX: Immediate response to user (no timeout waiting)
- * 3. RESILIENCE: Sync can continue even if user closes browser
- * 4. RESOURCE EFFICIENCY: Server threads not blocked
- * 5. FOUNDATION: Can upgrade to queue systems (BullMQ, RabbitMQ) later
- *
- * HOW IT WORKS:
- * 1. Create SyncJob in 'pending' state
- * 2. Spawn background task (NOT awaited in request)
- * 3. Task fetches batches: skip=0, 20, 40, 60...
- * 4. Each batch updates SyncJob progress
- * 5. When no more batches, mark 'completed'
- *
- * BATCH STRATEGY:
- * - Fixed batch size: 20 items per fetch
- * - Pagination: skip = batchNumber * 20
- * - Termination: When provider returns < 20 items OR provider error (timeout)
- * - Never overwrites problems (deduplication before insert)
+ * ARCHITECTURE (single-fetch, no loop):
+ *  1. Fetch ALL submissions in one call
+ *  2. If incremental: filter to only submissions newer than watermark timestamp
+ *  3. Normalize + deduplicate + insert, emitting socket progress every 5 items
+ *  4. Emit sync-complete / sync-failed
+ *  5. Stamp User.lastLeetcodeSyncAt as new watermark on success
  */
-
-// Configuration
-const BATCH_SIZE = 20; // Alfa API default and recommended
-const BATCH_DELAY = 500; // ms between batches (provider-friendly)
 
 /**
- * Start background sync for a user
+ * Start background sync for a user.
+ * Called from startBackgroundSync controller (fire-and-forget).
  *
- * RETURNS IMMEDIATELY - does NOT wait for sync to complete
- *
- * @param {string} syncJobId - ID of the SyncJob to process
- * @param {string} username - LeetCode username
- * @param {string} userId - User ID
- * @returns {Promise<void>}
+ * @param {string}    syncJobId      - SyncJob document _id
+ * @param {string}    username       - LeetCode username
+ * @param {string}    userId         - MongoDB User _id
+ * @param {Date|null} sinceTimestamp - Watermark for incremental sync (null = full)
+ * @param {string}    syncMode       - 'full' | 'incremental'
  */
-export async function startBackgroundSync(syncJobId, username, userId) {
+export async function startBackgroundSync(syncJobId, username, userId, sinceTimestamp = null, syncMode = 'full') {
+  const syncStartedAt = new Date();
+
   console.log(`\n${'='.repeat(70)}`);
   console.log(`🚀 BACKGROUND SYNC STARTED`);
-  console.log(`   SyncJob ID: ${syncJobId}`);
-  console.log(`   Username: ${username}`);
-  console.log(`   User ID: ${userId}`);
+  console.log(`   SyncJob ID : ${syncJobId}`);
+  console.log(`   Username   : ${username}`);
+  console.log(`   User ID    : ${userId}`);
+  console.log(`   Sync Mode  : ${syncMode.toUpperCase()}`);
+  console.log(`   Since      : ${sinceTimestamp ? sinceTimestamp.toISOString() : 'beginning of time (full sync)'}`);
   console.log(`${'='.repeat(70)}\n`);
 
   try {
-    // Update sync job to 'active'
-    await SyncJob.findByIdAndUpdate(syncJobId, { status: 'active' });
-
-    // Fetch initial stats to know total expected
-    console.log(`[STEP 1/2] 📊 Fetching stats to get totalExpected...`);
-    const statsResponse = await leetcodeProvider.fetchSolvedStats(username);
-
-    if (statsResponse.error) {
-      throw new Error(`Stats fetch failed: ${statsResponse.message}`);
-    }
-
-    const totalExpected = statsResponse.data.totalSolved;
-    console.log(`✅ Total expected: ${totalExpected}`);
-
-    // Update job with expected count
+    // Mark the job active
     await SyncJob.findByIdAndUpdate(syncJobId, {
-      'progress.totalExpected': totalExpected,
-      'metadata.apiEndpoint': 'https://alfa-leetcode-api.onrender.com'
+      status: 'active',
+      syncMode,
+      syncFrom: sinceTimestamp || null,
     });
 
-    if (totalExpected === 0) {
-      console.log(`⚠️  User has no solved problems - marking complete`);
-      await SyncJob.findByIdAndUpdate(syncJobId, {
+    // ── STEP 1: Fetch ALL submissions (single API call) ──────────────────────
+    console.log(`[STEP 1/3] 📡 Fetching all submissions from provider...`);
+    const providerResponse = await leetcodeProvider.fetchAcceptedProblems(username);
+
+    if (providerResponse.error) {
+      if (providerResponse.error === 'NO_SUBMISSIONS') {
+        console.log(`⚠️  User has no solved problems — marking complete`);
+        await SyncJob.findByIdAndUpdate(syncJobId, {
+          status: 'completed',
+          completedAt: new Date(),
+          'progress.totalExpected': 0,
+        });
+        getIO()?.to(userId.toString()).emit('sync-complete', {
+          status: 'completed',
+          progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
+          progressPercent: 100,
+        });
+        await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
+        return;
+      }
+      throw new Error(`Provider fetch failed: ${providerResponse.message}`);
+    }
+
+    let allSubmissions = providerResponse.data?.submissions ?? [];
+    const totalFetched = allSubmissions.length;
+    console.log(`✅ Fetched ${totalFetched} submissions from provider`);
+
+    await SyncJob.findByIdAndUpdate(syncJobId, {
+      'progress.totalExpected': totalFetched,
+      'metadata.apiEndpoint': 'https://alfa-leetcode-api.onrender.com',
+    });
+
+    if (totalFetched === 0) {
+      console.log(`⚠️  No submissions — marking complete`);
+      await SyncJob.findByIdAndUpdate(syncJobId, { status: 'completed', completedAt: new Date() });
+      getIO()?.to(userId.toString()).emit('sync-complete', {
         status: 'completed',
-        completedAt: new Date()
+        progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
+        progressPercent: 100,
       });
+      await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
       return;
     }
 
-    // Begin batch processing
-    console.log(`\n[STEP 2/2] 🔄 Starting batch processing (batch size: ${BATCH_SIZE})...\n`);
-    await processBatchesUntilComplete(syncJobId, username, userId);
+    // ── STEP 2: Apply incremental watermark filter ────────────────────────────
+    if (sinceTimestamp) {
+      console.log(`[STEP 2/3] 🔵 INCREMENTAL: filtering submissions after ${sinceTimestamp.toISOString()}`);
+      const before = allSubmissions.length;
+      allSubmissions = allSubmissions.filter((sub) => {
+        // timestamp is a Unix seconds string
+        const ts = sub.timestamp
+          ? new Date(parseInt(sub.timestamp) * 1000)
+          : new Date(sub.solvedAt || 0);
+        return ts > sinceTimestamp;
+      });
+      console.log(`✅ Delta: ${before} total → ${allSubmissions.length} new (${before - allSubmissions.length} already synced)`);
+    } else {
+      console.log(`[STEP 2/3] 🟢 FULL SYNC: processing all ${allSubmissions.length} submissions`);
+    }
 
-    // Mark as completed
-    console.log(`\n✅ SYNC COMPLETE`);
+    if (allSubmissions.length === 0) {
+      console.log(`✅ Nothing new since last sync — marking complete`);
+      await SyncJob.findByIdAndUpdate(syncJobId, { status: 'completed', completedAt: new Date() });
+      getIO()?.to(userId.toString()).emit('sync-complete', {
+        status: 'completed',
+        progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
+        progressPercent: 100,
+      });
+      await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
+      return;
+    }
+
+    // ── STEP 3: Normalize → deduplicate → insert ──────────────────────────────
+    console.log(`\n[STEP 3/3] 💾 Normalizing & inserting ${allSubmissions.length} submissions...`);
+    const { inserted, duplicates, failed } = await processSubmissions(syncJobId, userId, allSubmissions);
+
+    // ── DONE ──────────────────────────────────────────────────────────────────
+    console.log(`\n✅ SYNC COMPLETE — inserted: ${inserted}, duplicates: ${duplicates}, failed: ${failed}`);
+
     await SyncJob.findByIdAndUpdate(syncJobId, {
       status: 'completed',
-      completedAt: new Date()
+      completedAt: new Date(),
+      'progress.processed': allSubmissions.length,
+      'progress.inserted': inserted,
+      'progress.duplicates': duplicates,
+      'progress.failed': failed,
     });
+
+    getIO()?.to(userId.toString()).emit('sync-complete', {
+      status: 'completed',
+      progress: {
+        expectedProblems: allSubmissions.length,
+        fetchedFromProvider: allSubmissions.length,
+        insertedToDatabase: inserted,
+        duplicatesSkipped: duplicates,
+        failedToProcess: failed,
+      },
+      progressPercent: 100,
+    });
+
+    // Stamp watermark using the time the sync STARTED (not now),
+    // so any problems solved mid-sync are caught on the next incremental run.
+    await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
+    console.log(`✅ Watermark stamped: ${syncStartedAt.toISOString()}`);
 
   } catch (error) {
     console.error(`❌ BACKGROUND SYNC FAILED: ${error.message}`);
@@ -106,202 +161,103 @@ export async function startBackgroundSync(syncJobId, username, userId) {
       error: {
         message: error.message,
         code: error.code || 'UNKNOWN',
-        timestamp: new Date()
-      }
+        timestamp: new Date(),
+      },
     });
+    getIO()?.to(userId.toString()).emit('sync-failed', {
+      status: 'failed',
+      error: error.message,
+      progressPercent: 0,
+    });
+    // Do NOT stamp watermark on failure — next sync retries from same point
   }
 }
 
 /**
- * Process batches until provider returns empty or fewer than batch size
+ * Normalize, deduplicate, and insert a list of raw submissions.
+ * Emits sync-progress socket events every 5 items so the UI bar moves.
  *
- * BATCHING STRATEGY:
- * - Batch 1: skip=0, limit=20
- * - Batch 2: skip=20, limit=20
- * - Batch 3: skip=40, limit=20
- * - Continue until: provider returns 0 OR <20 items
+ * Uses normalizeSubmission (per-item) not normalizeAcceptedProblems (full response).
  *
- * @param {string} syncJobId - SyncJob document ID
- * @param {string} username - LeetCode username
- * @param {string} userId - MongoDB user ID
- * @returns {Promise<void>}
+ * @param {string} syncJobId
+ * @param {string} userId
+ * @param {Array}  submissions - raw submission objects from provider
+ * @returns {Promise<{inserted: number, duplicates: number, failed: number}>}
  */
-async function processBatchesUntilComplete(syncJobId, username, userId) {
-  let skip = 0;
-  let batchNum = 1;
-  let hasMore = true;
-  let totalProcessed = 0;
-
-  while (hasMore) {
-    console.log(`\n📥 BATCH ${batchNum}: skip=${skip}, limit=${BATCH_SIZE}`);
-
-    try {
-      // Fetch batch from provider
-      const providerResponse = await leetcodeProvider.fetchAcceptedProblems(
-        username,
-        BATCH_SIZE,
-        skip
-      );
-
-      // Check for provider errors
-      if (providerResponse.error) {
-        console.error(`❌ Provider error: ${providerResponse.message}`);
-
-        // If timeout/network error, mark as completed with what we have
-        if (
-          providerResponse.error === 'TIMEOUT' ||
-          providerResponse.error === 'NETWORK_ERROR'
-        ) {
-          console.log(`⚠️  Provider error - stopping batch processing`);
-          hasMore = false;
-          break;
-        }
-
-        // For other errors, throw and mark sync as failed
-        throw new Error(providerResponse.message);
-      }
-
-      const submissions = providerResponse.data.submissions || [];
-      const batchSize = submissions.length;
-
-      if (batchSize === 0) {
-        console.log(`   ✨ No more submissions - end of results`);
-        hasMore = false;
-        break;
-      }
-
-      console.log(`   ✅ Received ${batchSize} submissions`);
-
-      // Process and insert batch
-      const batchResults = await processBatch(
-        syncJobId,
-        userId,
-        submissions,
-        batchNum
-      );
-
-      totalProcessed += batchResults.processed;
-
-      // Update sync job progress
-      const updatedJob = await SyncJob.findById(syncJobId);
-      await SyncJob.findByIdAndUpdate(syncJobId, {
-        'progress.batchesProcessed': batchNum,
-        'progress.processed':
-          updatedJob.progress.processed + batchResults.processed,
-        'progress.inserted':
-          updatedJob.progress.inserted + batchResults.inserted,
-        'progress.duplicates':
-          updatedJob.progress.duplicates + batchResults.duplicates,
-        'progress.failed':
-          updatedJob.progress.failed + batchResults.failed,
-        'metadata.lastBatchSize': batchSize,
-        'metadata.lastBatchSkip': skip,
-        'metadata.lastBatchAt': new Date()
-      });
-
-      console.log(`   📊 Progress:`, {
-        inserted: batchResults.inserted,
-        duplicates: batchResults.duplicates,
-        failed: batchResults.failed
-      });
-
-      // Check if we got fewer items than requested (pagination end)
-      if (batchSize < BATCH_SIZE) {
-        console.log(
-          `   ✨ Received ${batchSize} < ${BATCH_SIZE} - end of results`
-        );
-        hasMore = false;
-        break;
-      }
-
-      // Move to next batch
-      skip += BATCH_SIZE;
-      batchNum++;
-
-      // Rate limiting - be nice to provider
-      console.log(`   ⏳ Waiting ${BATCH_DELAY}ms before next batch...`);
-      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));
-
-    } catch (error) {
-      console.error(`❌ Batch ${batchNum} failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  console.log(`\n📊 SYNC STATISTICS:`);
-  console.log(`   Total batches: ${batchNum - 1}`);
-  console.log(`   Total processed: ${totalProcessed}`);
-}
-
-/**
- * Process single batch: normalize, deduplicate, insert
- *
- * DEDUPLICATION STRATEGY:
- * - MongoDB unique index on (userId, titleSlug)
- * - Check existing before insert
- * - Never delete problems (preserve history)
- * - If duplicate: skip insert, increment duplicates counter
- *
- * @param {string} syncJobId - SyncJob document ID
- * @param {string} userId - MongoDB user ID
- * @param {Array} submissions - Raw submissions from provider
- * @param {number} batchNum - Which batch number this is
- * @returns {Promise<Object>} { processed, inserted, duplicates, failed }
- */
-async function processBatch(syncJobId, userId, submissions, batchNum) {
-  console.log(`   🔄 Processing ${submissions.length} submissions...`);
-
+async function processSubmissions(syncJobId, userId, submissions) {
   let inserted = 0;
   let duplicates = 0;
   let failed = 0;
-  let processed = 0;
+  const total = submissions.length;
+  const seenSlugs = new Set(); // in-memory dedup within this run
 
-  for (const submission of submissions) {
+  for (let i = 0; i < submissions.length; i++) {
+    const submission = submissions[i];
     try {
-      // Normalize submission to problem document
-      const normalized = normalizeAcceptedProblems([submission], userId);
+      // Use the per-item normalizer (not the full-response wrapper)
+      const normalized = normalizeSubmission(submission, i);
 
-      if (!normalized || normalized.length === 0) {
-        console.warn(`      ⚠️  Could not normalize submission:`, submission);
+      if (!normalized) {
         failed++;
         continue;
       }
 
-      processed++;
-
-      const problemDoc = normalized[0];
-
-      // Check if already exists (deduplication)
-      const existing = await Problem.findOne({
-        userId: userId,
-        titleSlug: problemDoc.titleSlug
-      });
-
-      if (existing) {
+      // Skip within-run duplicates (same problem solved multiple times)
+      if (seenSlugs.has(normalized.titleSlug)) {
         duplicates++;
-        continue; // Skip - already have this problem
+        continue;
+      }
+      seenSlugs.add(normalized.titleSlug);
+
+      // Build the full MongoDB document (adds userId, platform, etc.)
+      const doc = buildProblemDocument({ ...normalized, userId }, userId);
+
+      // DB-level dedup: skip if already stored
+      const exists = await Problem.findOne({ userId, titleSlug: normalized.titleSlug }).select('_id').lean();
+      if (exists) {
+        duplicates++;
+        continue;
       }
 
-      // Insert new problem
-      await Problem.create(problemDoc);
+      await Problem.create(doc);
       inserted++;
 
-    } catch (error) {
-      console.warn(`      ❌ Error processing submission:`, error.message);
+    } catch (err) {
+      console.warn(`      ❌ Submission ${i} error:`, err.message);
       failed++;
+    }
+
+    // Emit progress every 5 items and on the very last item
+    if ((i + 1) % 5 === 0 || i === total - 1) {
+      const progressPercent = Math.min(Math.round(((i + 1) / total) * 99), 99);
+
+      getIO()?.to(userId.toString()).emit('sync-progress', {
+        status: 'active',
+        progress: {
+          expectedProblems: total,
+          fetchedFromProvider: i + 1,
+          insertedToDatabase: inserted,
+          duplicatesSkipped: duplicates,
+          failedToProcess: failed,
+        },
+        progressPercent,
+      });
+
+      // Also persist progress to DB for REST-polling fallback
+      await SyncJob.findByIdAndUpdate(syncJobId, {
+        'progress.processed': i + 1,
+        'progress.inserted': inserted,
+        'progress.duplicates': duplicates,
+        'progress.failed': failed,
+      });
     }
   }
 
-  return {
-    processed,
-    inserted,
-    duplicates,
-    failed
-  };
+  console.log(`\n📊 PROCESS COMPLETE: inserted=${inserted} duplicates=${duplicates} failed=${failed}`);
+  return { inserted, duplicates, failed };
 }
 
 export default {
   startBackgroundSync,
-  processBatchesUntilComplete,
-  processBatch
+  processSubmissions,
 };

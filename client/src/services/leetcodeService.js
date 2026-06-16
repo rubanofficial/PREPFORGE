@@ -5,6 +5,7 @@ const LEECODE_ENDPOINTS = {
     START_DEEP_SYNC: '/leetcode/start-deep-sync',
     START_SYNC: '/leetcode/start-sync',
     SYNC_STATUS: (id) => `/leetcode/sync-status/${id}`,
+    SYNC_INFO: '/leetcode/sync-info',
 }
 
 const leetcodeService = {
@@ -23,7 +24,11 @@ const leetcodeService = {
     async getSyncStatus(id) {
         const res = await apiClient.get(LEECODE_ENDPOINTS.SYNC_STATUS(id))
         return res.data
+    },
+    async getSyncInfo() {
+        const res = await apiClient.get(LEECODE_ENDPOINTS.SYNC_INFO)
+        return res.data
     }
 }
 
-export default leetcodeService
+export default leetcodeService

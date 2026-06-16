@@ -443,30 +443,60 @@ const getUserProblems = asyncHandler(async (req, res, next) => {
  * - Foundation: Can upgrade to queue systems later
  */
 const startBackgroundSync = asyncHandler(async (req, res, next) => {
-    const { leetcodeUsername } = req.body;
     const userId = req.user.userId;
 
-    // Validate input
-    if (!leetcodeUsername || typeof leetcodeUsername !== 'string') {
-        return next(new AppError('LeetCode username is required', 400));
+    // Username can come from body OR from the stored User record (same as deep-sync)
+    let username = req.body?.leetcodeUsername?.trim();
+
+    if (!username) {
+        // Fall back to the stored leetcodeUsername on the User document
+        const userRecord = await User.findById(userId).select('leetcodeUsername');
+        if (!userRecord) return next(new AppError('User not found', 404));
+        username = userRecord.leetcodeUsername;
     }
 
-    const username = leetcodeUsername.trim();
+    if (!username || typeof username !== 'string') {
+        return next(new AppError('LeetCode username is required. Please set it in Settings.', 400));
+    }
+
     if (username.length < 2 || username.length > 50) {
         return next(new AppError('Username must be 2-50 characters', 400));
     }
 
     console.log(`\n${'='.repeat(70)}`);
-    console.log(`📨 START-SYNC: Creating sync job for user ${userId}`);
+    console.log(`📨 START-SYNC: Determining sync mode for user ${userId}`);
     console.log(`   Username: ${username}`);
     console.log(`${'='.repeat(70)}\n`);
 
     try {
+        // ── DETERMINE SYNC MODE ────────────────────────────────────────────────
+        // Read the user's last sync watermark from the database.
+        // - null  → never synced before → FULL sync
+        // - Date  → previously synced   → INCREMENTAL sync (delta only)
+        const user = await User.findById(userId).select('lastLeetcodeSyncAt');
+
+        if (!user) {
+            return next(new AppError('User not found', 404));
+        }
+
+        const sinceTimestamp = user.lastLeetcodeSyncAt || null;
+        const syncMode = sinceTimestamp ? 'incremental' : 'full';
+
+        console.log(`✅ Sync mode determined: ${syncMode.toUpperCase()}`);
+        if (sinceTimestamp) {
+            console.log(`   Watermark (last sync): ${sinceTimestamp.toISOString()}`);
+        } else {
+            console.log(`   No prior sync found — performing full sync`);
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         // Create SyncJob in pending state
         const syncJob = await SyncJob.create({
             userId,
             username: username.toLowerCase(),
-            status: 'pending'
+            status: 'pending',
+            syncMode,
+            syncFrom: sinceTimestamp
         });
 
         console.log(`✅ SyncJob created: ${syncJob._id}`);
@@ -476,7 +506,9 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
         backgroundSyncService.startBackgroundSync(
             syncJob._id.toString(),
             username,
-            userId
+            userId,
+            sinceTimestamp,
+            syncMode
         ).catch(error => {
             // Catch unhandled errors in background task
             console.error(`❌ Background sync failed (unhandled):`, error);
@@ -488,11 +520,13 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
         // Return immediately with sync job ID
         res.status(202).json({
             success: true,
-            message: 'Sync started in background',
+            message: `${syncMode === 'incremental' ? 'Incremental' : 'Full'} sync started in background`,
             data: {
                 syncJobId: syncJob._id,
                 username: username,
                 status: syncJob.status,
+                syncMode,
+                sinceTimestamp: sinceTimestamp || null,
                 message: 'Use GET /api/leetcode/sync-status/:syncJobId to check progress'
             }
         });
@@ -534,7 +568,7 @@ const getSyncStatus = asyncHandler(async (req, res, next) => {
     try {
         // Fetch sync job
         const syncJob = await SyncJob.findById(syncJobId).select(
-            'userId username status progress startedAt completedAt error metadata'
+            'userId username status progress startedAt completedAt error metadata syncMode syncFrom'
         );
 
         if (!syncJob) {
@@ -587,6 +621,9 @@ const getSyncStatus = asyncHandler(async (req, res, next) => {
                 username: syncJob.username,
                 status: syncJob.status,
 
+                // Sync type (full vs incremental delta sync)
+                syncMode: syncJob.syncMode || 'full',
+                sinceTimestamp: syncJob.syncFrom || null,
                 // Progress tracking
                 progress: {
                     expectedProblems: syncJob.progress.totalExpected,
@@ -916,6 +953,41 @@ const startDeepSync = asyncHandler(async (req, res, next) => {
     }
 });
 
+/**
+ * GET /api/leetcode/sync-info
+ * Returns sync metadata needed by the UI to show delta preview:
+ * - lastSyncAt   : watermark timestamp (null = never synced)
+ * - localCount   : number of problems stored locally for this user
+ * - syncMode     : 'full' (first sync) | 'incremental' (subsequent syncs)
+ */
+const getSyncInfo = asyncHandler(async (req, res, next) => {
+    const userId = req.user.userId;
+
+    try {
+        const [user, localCount] = await Promise.all([
+            User.findById(userId).select('lastLeetcodeSyncAt leetcodeUsername'),
+            Problem.countDocuments({ userId })
+        ]);
+
+        if (!user) return next(new AppError('User not found', 404));
+
+        const lastSyncAt = user.lastLeetcodeSyncAt || null;
+        const syncMode = lastSyncAt ? 'incremental' : 'full';
+
+        res.status(200).json({
+            success: true,
+            data: {
+                lastSyncAt,
+                localCount,
+                syncMode,
+                leetcodeUsername: user.leetcodeUsername || null
+            }
+        });
+    } catch (error) {
+        return next(new AppError(`Failed to get sync info: ${error.message}`, 500));
+    }
+});
+
 export {
     storeSession,
     startDeepSync,
@@ -925,5 +997,6 @@ export {
     getSyncStatus,
     getUserProblems,
     getLeetCodeStats,
-    getAIAnalysis
+    getAIAnalysis,
+    getSyncInfo
 };

@@ -8,7 +8,8 @@ import {
     getSyncStatus,
     getUserProblems,
     getLeetCodeStats,
-    getAIAnalysis
+    getAIAnalysis,
+    getSyncInfo
 } from '../controllers/leetcodeController.js';
 import { protect } from '../middleware/authMiddleware.js';
 
@@ -65,5 +66,10 @@ router.get('/stats', protect, getLeetCodeStats);
 // GET /api/leetcode/ai-analysis - Get AI-powered performance analysis
 // Protected route: requires authentication
 router.get('/ai-analysis', protect, getAIAnalysis);
+
+// GET /api/leetcode/sync-info - Get sync metadata (last sync, local count, next sync mode)
+// Protected route: requires authentication
+// Used by the UI to show delta preview before user presses Sync
+router.get('/sync-info', protect, getSyncInfo);
 
 export default router;

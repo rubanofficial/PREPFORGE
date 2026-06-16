@@ -41,7 +41,7 @@
  * @param {number} index - Submission index
  * @returns {Object|null}
  */
-function normalizeSubmission(submission, index = 0) {
+export function normalizeSubmission(submission, index = 0) {
     if (!submission || typeof submission !== 'object') {
         console.warn(
             `⚠️  Normalization: Skipping submission ${index} (not an object)`,

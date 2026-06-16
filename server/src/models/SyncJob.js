@@ -1,23 +1,5 @@
 import mongoose from 'mongoose';
 
-/**
- * SYNC JOB MODEL
- * 
- * Tracks background LeetCode sync jobs.
- * 
- * WHY THIS MODEL EXISTS:
- * 1. ASYNC TRACKING: Background jobs need persistent state
- * 2. PROGRESS UPDATES: UI can poll status without blocking
- * 3. HISTORY: Audit trail of what was synced
- * 4. FAILURE RECOVERY: Can retry failed syncs
- * 5. SCALABILITY: Foundation for queue systems (BullMQ, RabbitMQ)
- * 
- * LIFECYCLE:
- * - Created: pending (user clicks sync)
- * - Processing: active (batches being fetched)
- * - Completed: completed (all batches done)
- * - Failed: failed (error occurred)
- */
 
 const syncJobSchema = new mongoose.Schema({
     // User who triggered the sync
@@ -33,6 +15,19 @@ const syncJobSchema = new mongoose.Schema({
         type: String,
         required: true,
         lowercase: true
+    },
+
+    // Sync mode: 'full' on first sync, 'incremental' on subsequent syncs
+    syncMode: {
+        type: String,
+        enum: ['full', 'incremental'],
+        default: 'full'
+    },
+
+    // Watermark timestamp used for incremental sync (null for full syncs)
+    syncFrom: {
+        type: Date,
+        default: null
     },
 
     // Status tracking
