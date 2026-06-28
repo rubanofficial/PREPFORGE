@@ -6,178 +6,210 @@ import User from '../../models/User.js';
 import { getIO } from '../../socketManager.js';
 
 /**
- * BACKGROUND SYNC SERVICE
+ * BACKGROUND SYNC SERVICE — TRUE DELTA SYNC
  *
- * The Alfa LeetCode API returns ALL accepted submissions in ONE response
- * (the skip/offset param is ignored — no real server-side pagination).
+ * ============================================================
+ * ARCHITECTURE: Count-Based Delta Synchronization
+ * ============================================================
  *
- * ARCHITECTURE (single-fetch, no loop):
- *  1. Fetch ALL submissions in one call
- *  2. If incremental: filter to only submissions newer than watermark timestamp
- *  3. Normalize + deduplicate + insert, emitting socket progress every 5 items
- *  4. Emit sync-complete / sync-failed
- *  5. Stamp User.lastLeetcodeSyncAt as new watermark on success
+ * OLD APPROACH (Full Sync + Dedup):
+ *   1. Fetch all 317 submissions
+ *   2. Compare each against MongoDB
+ *   3. Insert the 3 new ones
+ *   API calls: O(N) where N = total solved
+ *
+ * NEW APPROACH (True Delta Sync):
+ *   1. Fetch solved COUNT (1 cheap call) → 317
+ *   2. Read User.lastSolvedCount           → 314
+ *   3. Compute delta                       → 3
+ *   4. Fetch ONLY 3 newest submissions
+ *   5. Insert those 3
+ *   API calls: O(1) count call + O(delta) fetch
+ *
+ * For 314→317: fetches 3 items instead of 317.
+ * That's a 99% reduction in API payload for typical incremental runs.
+ *
+ * IDEMPOTENCY (safety guarantee):
+ *   Even after computing the delta, we still run Problem.findOne()
+ *   before every insert, so running sync twice is always safe.
+ *
+ * EDGE CASES HANDLED:
+ *   - First sync (lastSolvedCount = 0) → full fetch
+ *   - No new problems (delta = 0)       → immediate complete
+ *   - Count regression (reset/anomaly)  → full recovery sync
  */
 
 /**
- * Start background sync for a user.
- * Called from startBackgroundSync controller (fire-and-forget).
+ * Start background sync for a user (fire-and-forget from controller).
  *
- * @param {string}    syncJobId      - SyncJob document _id
- * @param {string}    username       - LeetCode username
- * @param {string}    userId         - MongoDB User _id
- * @param {Date|null} sinceTimestamp - Watermark for incremental sync (null = full)
- * @param {string}    syncMode       - 'full' | 'incremental'
+ * @param {string}    syncJobId        - SyncJob document _id
+ * @param {string}    username         - LeetCode username
+ * @param {string}    userId           - MongoDB User _id
+ * @param {number}    lastSolvedCount  - Solved count from last successful sync (0 = first sync)
+ * @param {string}    syncMode         - 'full' | 'incremental' (informational; actual mode derived from count)
  */
-export async function startBackgroundSync(syncJobId, username, userId, sinceTimestamp = null, syncMode = 'full') {
+export async function startBackgroundSync(syncJobId, username, userId, lastSolvedCount = 0, syncMode = 'full') {
   const syncStartedAt = new Date();
 
   console.log(`\n${'='.repeat(70)}`);
-  console.log(`🚀 BACKGROUND SYNC STARTED`);
-  console.log(`   SyncJob ID : ${syncJobId}`);
-  console.log(`   Username   : ${username}`);
-  console.log(`   User ID    : ${userId}`);
-  console.log(`   Sync Mode  : ${syncMode.toUpperCase()}`);
-  console.log(`   Since      : ${sinceTimestamp ? sinceTimestamp.toISOString() : 'beginning of time (full sync)'}`);
+  console.log(`🚀 DELTA SYNC ENGINE — STARTED`);
+  console.log(`   SyncJob ID         : ${syncJobId}`);
+  console.log(`   Username           : ${username}`);
+  console.log(`   Previous Solved    : ${lastSolvedCount}`);
   console.log(`${'='.repeat(70)}\n`);
 
   try {
-    // Mark the job active
+    await SyncJob.findByIdAndUpdate(syncJobId, { status: 'active', syncMode });
+
+    // ── STEP 1: Get current solved count (single cheap API call) ────────────
+    console.log(`[STEP 1/3] 📊 Fetching current solved count...`);
+    const countResponse = await leetcodeProvider.fetchSolvedCount(username);
+
+    if (countResponse.error) {
+      throw new Error(`Failed to fetch solved count: ${countResponse.message}`);
+    }
+
+    const currentSolvedCount = countResponse.data.totalSolved;
+
+    // ── STEP 2: Compute delta ────────────────────────────────────────────────
+    console.log(`[STEP 2/3] 🔢 Computing delta...`);
+    console.log(`   Previous Solved Count : ${lastSolvedCount}`);
+    console.log(`   Current Solved Count  : ${currentSolvedCount}`);
+
+    let delta = currentSolvedCount - lastSolvedCount;
+    let effectiveSyncMode = 'incremental';
+
+    if (lastSolvedCount === 0) {
+      // First-ever sync — fetch everything
+      delta = currentSolvedCount;
+      effectiveSyncMode = 'full';
+      console.log(`   → FIRST SYNC: fetching all ${delta} problems`);
+    } else if (delta === 0) {
+      // Nothing new
+      console.log(`   → NO NEW PROBLEMS: delta = 0, marking complete`);
+      await _markComplete(syncJobId, userId, currentSolvedCount, syncStartedAt, { inserted: 0, duplicates: 0, failed: 0, total: 0 });
+      return;
+    } else if (delta < 0) {
+      // Count went down — user account reset or API anomaly → full recovery sync
+      console.log(`   → COUNT REGRESSION (${lastSolvedCount} → ${currentSolvedCount}): triggering full recovery sync`);
+      delta = currentSolvedCount;
+      effectiveSyncMode = 'full';
+    } else {
+      // Normal incremental
+      console.log(`   → INCREMENTAL: fetching ${delta} new problem${delta !== 1 ? 's' : ''}`);
+    }
+
+    console.log(`   Delta : ${delta}`);
+    console.log(`   Mode  : ${effectiveSyncMode.toUpperCase()}`);
+
     await SyncJob.findByIdAndUpdate(syncJobId, {
-      status: 'active',
-      syncMode,
-      syncFrom: sinceTimestamp || null,
+      syncMode: effectiveSyncMode,
+      'progress.totalExpected': delta,
+      'metadata.previousSolvedCount': lastSolvedCount,
+      'metadata.currentSolvedCount': currentSolvedCount,
+      'metadata.delta': delta,
     });
 
-    // ── STEP 1: Fetch ALL submissions (single API call) ──────────────────────
-    console.log(`[STEP 1/3] 📡 Fetching all submissions from provider...`);
-    const providerResponse = await leetcodeProvider.fetchAcceptedProblems(username);
+    if (delta === 0) {
+      await _markComplete(syncJobId, userId, currentSolvedCount, syncStartedAt, { inserted: 0, duplicates: 0, failed: 0, total: 0 });
+      return;
+    }
+
+    // ── STEP 3: Fetch ONLY the delta-many newest submissions ─────────────────
+    console.log(`\n[STEP 3/3] 📡 Fetching ${delta} newest submissions...`);
+    const providerResponse = await leetcodeProvider.fetchAcceptedProblems(username, delta);
 
     if (providerResponse.error) {
       if (providerResponse.error === 'NO_SUBMISSIONS') {
-        console.log(`⚠️  User has no solved problems — marking complete`);
-        await SyncJob.findByIdAndUpdate(syncJobId, {
-          status: 'completed',
-          completedAt: new Date(),
-          'progress.totalExpected': 0,
-        });
-        getIO()?.to(userId.toString()).emit('sync-complete', {
-          status: 'completed',
-          progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
-          progressPercent: 100,
-        });
-        await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
+        await _markComplete(syncJobId, userId, currentSolvedCount, syncStartedAt, { inserted: 0, duplicates: 0, failed: 0, total: 0 });
         return;
       }
-      throw new Error(`Provider fetch failed: ${providerResponse.message}`);
+      throw new Error(`Submission fetch failed: ${providerResponse.message}`);
     }
 
-    let allSubmissions = providerResponse.data?.submissions ?? [];
-    const totalFetched = allSubmissions.length;
-    console.log(`✅ Fetched ${totalFetched} submissions from provider`);
+    const submissions = providerResponse.data?.submissions ?? [];
+    console.log(`✅ Received ${submissions.length} submissions from provider`);
 
-    await SyncJob.findByIdAndUpdate(syncJobId, {
-      'progress.totalExpected': totalFetched,
-      'metadata.apiEndpoint': 'https://alfa-leetcode-api.onrender.com',
+    // Update totalExpected to the actual received count (in case API returned fewer)
+    await SyncJob.findByIdAndUpdate(syncJobId, { 'progress.totalExpected': submissions.length });
+
+    // ── STEP 4: Normalize → dedup → insert ──────────────────────────────────
+    const results = await processSubmissions(syncJobId, userId, submissions);
+
+    // ── DONE ─────────────────────────────────────────────────────────────────
+    await _markComplete(syncJobId, userId, currentSolvedCount, syncStartedAt, {
+      ...results,
+      total: submissions.length,
     });
-
-    if (totalFetched === 0) {
-      console.log(`⚠️  No submissions — marking complete`);
-      await SyncJob.findByIdAndUpdate(syncJobId, { status: 'completed', completedAt: new Date() });
-      getIO()?.to(userId.toString()).emit('sync-complete', {
-        status: 'completed',
-        progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
-        progressPercent: 100,
-      });
-      await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
-      return;
-    }
-
-    // ── STEP 2: Apply incremental watermark filter ────────────────────────────
-    if (sinceTimestamp) {
-      console.log(`[STEP 2/3] 🔵 INCREMENTAL: filtering submissions after ${sinceTimestamp.toISOString()}`);
-      const before = allSubmissions.length;
-      allSubmissions = allSubmissions.filter((sub) => {
-        // timestamp is a Unix seconds string
-        const ts = sub.timestamp
-          ? new Date(parseInt(sub.timestamp) * 1000)
-          : new Date(sub.solvedAt || 0);
-        return ts > sinceTimestamp;
-      });
-      console.log(`✅ Delta: ${before} total → ${allSubmissions.length} new (${before - allSubmissions.length} already synced)`);
-    } else {
-      console.log(`[STEP 2/3] 🟢 FULL SYNC: processing all ${allSubmissions.length} submissions`);
-    }
-
-    if (allSubmissions.length === 0) {
-      console.log(`✅ Nothing new since last sync — marking complete`);
-      await SyncJob.findByIdAndUpdate(syncJobId, { status: 'completed', completedAt: new Date() });
-      getIO()?.to(userId.toString()).emit('sync-complete', {
-        status: 'completed',
-        progress: { expectedProblems: 0, fetchedFromProvider: 0, insertedToDatabase: 0, duplicatesSkipped: 0, failedToProcess: 0 },
-        progressPercent: 100,
-      });
-      await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
-      return;
-    }
-
-    // ── STEP 3: Normalize → deduplicate → insert ──────────────────────────────
-    console.log(`\n[STEP 3/3] 💾 Normalizing & inserting ${allSubmissions.length} submissions...`);
-    const { inserted, duplicates, failed } = await processSubmissions(syncJobId, userId, allSubmissions);
-
-    // ── DONE ──────────────────────────────────────────────────────────────────
-    console.log(`\n✅ SYNC COMPLETE — inserted: ${inserted}, duplicates: ${duplicates}, failed: ${failed}`);
-
-    await SyncJob.findByIdAndUpdate(syncJobId, {
-      status: 'completed',
-      completedAt: new Date(),
-      'progress.processed': allSubmissions.length,
-      'progress.inserted': inserted,
-      'progress.duplicates': duplicates,
-      'progress.failed': failed,
-    });
-
-    getIO()?.to(userId.toString()).emit('sync-complete', {
-      status: 'completed',
-      progress: {
-        expectedProblems: allSubmissions.length,
-        fetchedFromProvider: allSubmissions.length,
-        insertedToDatabase: inserted,
-        duplicatesSkipped: duplicates,
-        failedToProcess: failed,
-      },
-      progressPercent: 100,
-    });
-
-    // Stamp watermark using the time the sync STARTED (not now),
-    // so any problems solved mid-sync are caught on the next incremental run.
-    await User.findByIdAndUpdate(userId, { lastLeetcodeSyncAt: syncStartedAt });
-    console.log(`✅ Watermark stamped: ${syncStartedAt.toISOString()}`);
 
   } catch (error) {
-    console.error(`❌ BACKGROUND SYNC FAILED: ${error.message}`);
+    console.error(`❌ DELTA SYNC FAILED: ${error.message}`);
     await SyncJob.findByIdAndUpdate(syncJobId, {
       status: 'failed',
-      error: {
-        message: error.message,
-        code: error.code || 'UNKNOWN',
-        timestamp: new Date(),
-      },
+      error: { message: error.message, code: error.code || 'UNKNOWN', timestamp: new Date() },
     });
     getIO()?.to(userId.toString()).emit('sync-failed', {
       status: 'failed',
       error: error.message,
       progressPercent: 0,
     });
-    // Do NOT stamp watermark on failure — next sync retries from same point
+    // Do NOT update watermark or lastSolvedCount on failure — retry from same point
   }
+}
+
+/**
+ * Mark a sync job complete, stamp watermark, update lastSolvedCount, and emit socket event.
+ *
+ * @param {string} syncJobId
+ * @param {string} userId
+ * @param {number} currentSolvedCount - The LeetCode count to save as new watermark
+ * @param {Date}   syncStartedAt
+ * @param {{ inserted, duplicates, failed, total }} metrics
+ */
+async function _markComplete(syncJobId, userId, currentSolvedCount, syncStartedAt, metrics) {
+  const { inserted, duplicates, failed, total } = metrics;
+
+  console.log(`\n✅ SYNC COMPLETE`);
+  console.log(`   Inserted   : ${inserted}`);
+  console.log(`   Duplicates : ${duplicates}`);
+  console.log(`   Failed     : ${failed}`);
+
+  await SyncJob.findByIdAndUpdate(syncJobId, {
+    status: 'completed',
+    completedAt: new Date(),
+    'progress.processed': total,
+    'progress.inserted': inserted,
+    'progress.duplicates': duplicates,
+    'progress.failed': failed,
+  });
+
+  getIO()?.to(userId.toString()).emit('sync-complete', {
+    status: 'completed',
+    progress: {
+      expectedProblems: total,
+      fetchedFromProvider: total,
+      insertedToDatabase: inserted,
+      duplicatesSkipped: duplicates,
+      failedToProcess: failed,
+    },
+    progressPercent: 100,
+  });
+
+  // Stamp BOTH watermarks — timestamp and solved count
+  await User.findByIdAndUpdate(userId, {
+    lastLeetcodeSyncAt: syncStartedAt,   // timestamp watermark (kept for compatibility)
+    lastSolvedCount: currentSolvedCount, // count watermark (used by delta sync)
+  });
+
+  console.log(`✅ Watermark stamped: lastSolvedCount = ${currentSolvedCount}, lastLeetcodeSyncAt = ${syncStartedAt.toISOString()}`);
 }
 
 /**
  * Normalize, deduplicate, and insert a list of raw submissions.
  * Emits sync-progress socket events every 5 items so the UI bar moves.
  *
- * Uses normalizeSubmission (per-item) not normalizeAcceptedProblems (full response).
+ * IDEMPOTENCY: Even though we only fetched delta items, we still call
+ * Problem.findOne() before each insert — double-protection against duplication.
  *
  * @param {string} syncJobId
  * @param {string} userId
@@ -194,30 +226,20 @@ async function processSubmissions(syncJobId, userId, submissions) {
   for (let i = 0; i < submissions.length; i++) {
     const submission = submissions[i];
     try {
-      // Use the per-item normalizer (not the full-response wrapper)
+      // Normalize using the per-item normalizer
       const normalized = normalizeSubmission(submission, i);
+      if (!normalized) { failed++; continue; }
 
-      if (!normalized) {
-        failed++;
-        continue;
-      }
-
-      // Skip within-run duplicates (same problem solved multiple times)
-      if (seenSlugs.has(normalized.titleSlug)) {
-        duplicates++;
-        continue;
-      }
+      // In-run dedup (same problem solved multiple times in the delta window)
+      if (seenSlugs.has(normalized.titleSlug)) { duplicates++; continue; }
       seenSlugs.add(normalized.titleSlug);
 
-      // Build the full MongoDB document (adds userId, platform, etc.)
+      // Build the full MongoDB document
       const doc = buildProblemDocument({ ...normalized, userId }, userId);
 
-      // DB-level dedup: skip if already stored
+      // DB-level idempotency check — safe to run sync twice
       const exists = await Problem.findOne({ userId, titleSlug: normalized.titleSlug }).select('_id').lean();
-      if (exists) {
-        duplicates++;
-        continue;
-      }
+      if (exists) { duplicates++; continue; }
 
       await Problem.create(doc);
       inserted++;
@@ -227,10 +249,9 @@ async function processSubmissions(syncJobId, userId, submissions) {
       failed++;
     }
 
-    // Emit progress every 5 items and on the very last item
+    // Emit progress every 5 items and on the last item
     if ((i + 1) % 5 === 0 || i === total - 1) {
       const progressPercent = Math.min(Math.round(((i + 1) / total) * 99), 99);
-
       getIO()?.to(userId.toString()).emit('sync-progress', {
         status: 'active',
         progress: {
@@ -243,7 +264,7 @@ async function processSubmissions(syncJobId, userId, submissions) {
         progressPercent,
       });
 
-      // Also persist progress to DB for REST-polling fallback
+      // Persist progress to DB for REST-polling fallback
       await SyncJob.findByIdAndUpdate(syncJobId, {
         'progress.processed': i + 1,
         'progress.inserted': inserted,
@@ -253,7 +274,7 @@ async function processSubmissions(syncJobId, userId, submissions) {
     }
   }
 
-  console.log(`\n📊 PROCESS COMPLETE: inserted=${inserted} duplicates=${duplicates} failed=${failed}`);
+  console.log(`\n📊 INSERT COMPLETE: inserted=${inserted} duplicates=${duplicates} failed=${failed}`);
   return { inserted, duplicates, failed };
 }
 

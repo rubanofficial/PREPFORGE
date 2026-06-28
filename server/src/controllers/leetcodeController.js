@@ -473,19 +473,19 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
         // Read the user's last sync watermark from the database.
         // - null  → never synced before → FULL sync
         // - Date  → previously synced   → INCREMENTAL sync (delta only)
-        const user = await User.findById(userId).select('lastLeetcodeSyncAt');
+        const user = await User.findById(userId).select('lastLeetcodeSyncAt lastSolvedCount');
 
         if (!user) {
             return next(new AppError('User not found', 404));
         }
 
+        const lastSolvedCount = user.lastSolvedCount ?? 0;
         const sinceTimestamp = user.lastLeetcodeSyncAt || null;
-        const syncMode = sinceTimestamp ? 'incremental' : 'full';
+        const syncMode = lastSolvedCount > 0 ? 'incremental' : 'full';
 
         console.log(`✅ Sync mode determined: ${syncMode.toUpperCase()}`);
-        if (sinceTimestamp) {
-            console.log(`   Watermark (last sync): ${sinceTimestamp.toISOString()}`);
-        } else {
+        console.log(`   Previous Solved Count: ${lastSolvedCount}`);
+        if (lastSolvedCount === 0) {
             console.log(`   No prior sync found — performing full sync`);
         }
         // ─────────────────────────────────────────────────────────────────────
@@ -507,7 +507,7 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
             syncJob._id.toString(),
             username,
             userId,
-            sinceTimestamp,
+            lastSolvedCount,
             syncMode
         ).catch(error => {
             // Catch unhandled errors in background task
@@ -526,7 +526,7 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
                 username: username,
                 status: syncJob.status,
                 syncMode,
-                sinceTimestamp: sinceTimestamp || null,
+                previousSolvedCount: lastSolvedCount,
                 message: 'Use GET /api/leetcode/sync-status/:syncJobId to check progress'
             }
         });

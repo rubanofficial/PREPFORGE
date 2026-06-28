@@ -56,6 +56,12 @@ const userSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        // Number of solved problems recorded at the last successful sync.
+        // Used to compute the delta: currentSolvedCount - lastSolvedCount = newProblems
+        lastSolvedCount: {
+            type: Number,
+            default: 0,
+        },
         createdAt: {
             type: Date,
             default: Date.now,

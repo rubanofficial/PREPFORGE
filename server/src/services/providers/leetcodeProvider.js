@@ -160,10 +160,12 @@ function validateUsername(username) {
  * ✅ Only metadata we need (not code, editorials, etc)
  * 
  * @param {string} username - LeetCode username
+ * @param {number|null} limit  - Max submissions to return (null = all)
  * @returns {Object} Raw provider response with accepted problems
  */
-async function fetchAcceptedProblems(username) {
-  console.log(`🔍 Provider: Fetching accepted problems for "${username}"`);
+async function fetchAcceptedProblems(username, limit = null) {
+  const limitLabel = limit !== null ? `limit=${limit}` : 'all';
+  console.log(`🔍 Provider: Fetching accepted problems for "${username}" (${limitLabel})`);
 
   // Validate input
   if (!validateUsername(username)) {
@@ -177,10 +179,12 @@ async function fetchAcceptedProblems(username) {
 
   try {
     const client = createAxiosInstance();
+    // Alfa API supports ?limit=N query param to cap how many submissions are returned
+    const params = limit !== null ? { limit } : {};
     const endpoint = `/${username.trim()}/acSubmission`;
 
-    console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`);
-    const response = await client.get(endpoint);
+    console.log(`📤 Provider: Sending REST request to ${ALFA_LEETCODE_API}${endpoint}`, params);
+    const response = await client.get(endpoint, { params });
 
     console.log(`📥 Provider: Response status: ${response.status}`);
 
@@ -281,8 +285,67 @@ async function fetchAcceptedProblems(username) {
 }
 
 /**
+ * Fetch total solved problem count for a user.
+ *
+ * Uses Alfa LeetCode API: GET /:username
+ * Returns totalSolved from the user's profile stats.
+ *
+ * WHY A SEPARATE FUNCTION?
+ * Delta sync needs ONLY the count, not the full submission list.
+ * One cheap count call → compute delta → fetch only delta items.
+ * Avoids fetching all 317 problems when only 3 are new.
+ *
+ * @param {string} username - LeetCode username
+ * @returns {{ data: { totalSolved: number } } | { error: string, message: string, statusCode: number }}
+ */
+async function fetchSolvedCount(username) {
+  console.log(`📊 Provider: Fetching solved count for "${username}"`);
+
+  if (!validateUsername(username)) {
+    return { error: 'INVALID_USERNAME', message: 'Invalid username', statusCode: 400 };
+  }
+
+  try {
+    const client = createAxiosInstance();
+    // Alfa API root endpoint returns profile including solved stats
+    const response = await client.get(`/${username.trim()}`);
+
+    if (!response.data) {
+      return { error: 'EMPTY_RESPONSE', message: 'Empty profile response', statusCode: 502 };
+    }
+
+    const data = response.data;
+
+    // Try multiple possible field names across API versions
+    const totalSolved =
+      data.totalSolved ??
+      data.total_solved ??
+      data.solvedProblem ??
+      data.solved ??
+      // Some versions nest under matchedUser
+      data.matchedUser?.submitStats?.acSubmissionNum?.find(s => s.difficulty === 'All')?.count ??
+      data.matchedUser?.submitStatsGlobal?.acSubmissionNum?.find(s => s.difficulty === 'All')?.count ??
+      null;
+
+    if (totalSolved === null || totalSolved === undefined) {
+      console.error(`❌ Provider: Could not extract totalSolved from profile response`);
+      console.error(`   Response keys:`, Object.keys(data));
+      return { error: 'PARSE_ERROR', message: 'Could not extract solved count from profile', statusCode: 502 };
+    }
+
+    console.log(`✅ Provider: totalSolved = ${totalSolved}`);
+    return { success: true, data: { totalSolved: Number(totalSolved) } };
+
+  } catch (error) {
+    const apiError = handleApiError(error, 'fetchSolvedCount');
+    console.error(`❌ Provider: fetchSolvedCount failed for "${username}":`, apiError);
+    return apiError;
+  }
+}
+
+/**
  * Export provider functions
- * 
+ *
  * PROVIDER RESPONSIBILITIES:
  * ✅ Fetch data from Alfa LeetCode API
  * ✅ Handle errors and timeouts
@@ -290,7 +353,7 @@ async function fetchAcceptedProblems(username) {
  * ✅ Return raw provider data only
  * ✅ Handle invalid usernames
  * ✅ Validate API responses
- * 
+ *
  * NOT PROVIDER RESPONSIBILITIES:
  * ❌ Normalize data
  * ❌ Insert into MongoDB
@@ -298,17 +361,11 @@ async function fetchAcceptedProblems(username) {
  * ❌ Validate business logic
  * ❌ Transform data structure
  * ❌ Handle duplicates
- * 
- * Why keep provider lightweight?
- * 1. ISOLATION: Easy to replace with GFG/Codeforces provider later
- * 2. TESTABILITY: Can mock provider responses independently
- * 3. REUSABILITY: Controller can call provider for multiple purposes
- * 4. CLARITY: Provider = API calls, Normalization = data transformation
- * 5. MAINTAINABILITY: If API changes, only update provider
  */
 export const LeetcodeProvider = {
   fetchAcceptedProblems,
-  validateUsername
+  fetchSolvedCount,
+  validateUsername,
 };
 
 export default LeetcodeProvider;
