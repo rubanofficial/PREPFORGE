@@ -154,6 +154,8 @@ export async function startBackgroundSync(syncJobId, username, userId, lastSolve
       progressPercent: 0,
     });
     // Do NOT update watermark or lastSolvedCount on failure — retry from same point
+    // Re-throw so BullMQ knows this job failed and should be retried
+    throw error;
   }
 }
 

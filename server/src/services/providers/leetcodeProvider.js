@@ -287,8 +287,8 @@ async function fetchAcceptedProblems(username, limit = null) {
 /**
  * Fetch total solved problem count for a user.
  *
- * Uses Alfa LeetCode API: GET /:username
- * Returns totalSolved from the user's profile stats.
+ * Uses Alfa LeetCode API: GET /:username/solved
+ * Returns totalSolved from the user's problem-solving stats.
  *
  * WHY A SEPARATE FUNCTION?
  * Delta sync needs ONLY the count, not the full submission list.
@@ -307,8 +307,8 @@ async function fetchSolvedCount(username) {
 
   try {
     const client = createAxiosInstance();
-    // Alfa API root endpoint returns profile including solved stats
-    const response = await client.get(`/${username.trim()}`);
+    // Alfa API /solved endpoint returns total solved count by difficulty
+    const response = await client.get(`/${username.trim()}/solved`);
 
     if (!response.data) {
       return { error: 'EMPTY_RESPONSE', message: 'Empty profile response', statusCode: 502 };

@@ -3,8 +3,7 @@ import leetcodeProvider from '../services/providers/leetcodeProvider.js';
 import leetcodeAuthProvider from '../services/providers/leetcodeAuthProvider.js';
 import { normalizeLeetcodeStats } from '../services/normalization/normalizeLeetcodeData.js';
 import { normalizeAcceptedProblems, buildProblemDocument } from '../services/normalization/normalizeAcceptedProblems.js';
-import backgroundSyncService from '../services/sync/backgroundSyncService.js';
-import deepSyncService from '../services/sync/deepSyncService.js';
+import syncQueue from '../queues/syncQueue.js';
 import { encrypt } from '../utils/encryption.js';
 import Problem from '../models/Problem.js';
 import SyncJob from '../models/SyncJob.js';
@@ -501,20 +500,19 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
 
         console.log(`✅ SyncJob created: ${syncJob._id}`);
 
-        // Spawn background task - do NOT await this
-        // This allows us to return immediately to client
-        backgroundSyncService.startBackgroundSync(
-            syncJob._id.toString(),
+        // Enqueue the sync job to BullMQ — the worker will execute it
+        // This returns immediately. No need to await the sync itself.
+        await syncQueue.add('sync', {
+            syncJobId: syncJob._id.toString(),
             username,
             userId,
             lastSolvedCount,
-            syncMode
-        ).catch(error => {
-            // Catch unhandled errors in background task
-            console.error(`❌ Background sync failed (unhandled):`, error);
+            syncMode,
+            syncType: 'delta',
         });
 
-        console.log(`🚀 Background sync spawned (not awaited)`);
+        console.log(`🚀 Sync job enqueued to BullMQ (not executed yet)`);
+        console.log(`   Queue: sync, Job type: delta`);
         console.log(`✅ Returning syncJobId to client immediately\n`);
 
         // Return immediately with sync job ID
@@ -797,7 +795,7 @@ const storeSession = asyncHandler(async (req, res, next) => {
 
     // Validate that cookie looks like a real session cookie
     const isValidCookie = leetcodeSessionCookie.length >= 20 && (
-        leetcodeSessionCookie.includes('=') || 
+        leetcodeSessionCookie.includes('=') ||
         leetcodeSessionCookie.startsWith('eyJ')
     );
     if (!isValidCookie) {
@@ -921,18 +919,19 @@ const startDeepSync = asyncHandler(async (req, res, next) => {
 
         console.log(`✅ SyncJob created: ${syncJob._id}`);
 
-        // Spawn background deep sync - do NOT await this
-        // This allows us to return immediately to client
-        deepSyncService.performDeepSync(
-            userId.toString(),
-            user.encryptedLeetCodeSession,
-            syncJob._id.toString()
-        ).catch(error => {
-            // Catch unhandled errors in background task
-            console.error(`❌ Deep sync failed (unhandled):`, error);
+        // Enqueue the deep sync job to BullMQ — the worker will execute it
+        // The worker will load the encrypted session from the User document
+        await syncQueue.add('sync', {
+            syncJobId: syncJob._id.toString(),
+            username: user.leetcodeUsername.toLowerCase(),
+            userId,
+            lastSolvedCount: 0,
+            syncMode: 'full',
+            syncType: 'deep',
         });
 
-        console.log(`🚀 Background deep sync spawned (not awaited)`);
+        console.log(`🚀 Deep sync job enqueued to BullMQ (not executed yet)`);
+        console.log(`   Queue: sync, Job type: deep`);
         console.log(`✅ Returning syncJobId to client immediately\n`);
 
         // Return immediately with sync job ID

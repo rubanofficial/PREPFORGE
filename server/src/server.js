@@ -7,6 +7,7 @@ import connectDB from './config/database.js'
 import authRoutes from './routes/authRoutes.js'
 import leetcodeRoutes from './routes/leetcodeRoutes.js'
 import { setIO } from './socketManager.js'
+import { startSyncWorker } from './workers/syncWorker.js'
 
 dotenv.config()
 
@@ -86,6 +87,9 @@ const PORT = process.env.PORT || 5000
 httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`)
     console.log(`📡 Socket.io server active`)
+
+    // Start the BullMQ sync worker to process queued sync jobs
+    startSyncWorker()
 })
 
 export { app, io }

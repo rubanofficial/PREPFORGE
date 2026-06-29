@@ -11,6 +11,7 @@
         "@google/generative-ai": "^0.24.1",
         "axios": "^1.16.1",
         "bcryptjs": "^2.4.3",
+        "bullmq": "^5.79.2",
         "cors": "^2.8.5",
         "dotenv": "^16.3.1",
         "express": "^4.18.2",
@@ -19,6 +20,7 @@
         "leetcode-query": "^2.0.1",
         "mongoose": "^8.0.0",
         "node-cron": "^3.0.3",
+        "redis": "^6.0.1",
         "socket.io": "^4.7.2"
     },
     "devDependencies": {

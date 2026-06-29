@@ -687,7 +687,9 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
             progressPercent: 0,
         });
 
-        return null;
+        // Re-throw so BullMQ knows this job failed and should be retried
+        // The error propagates to the worker, which triggers BullMQ's retry mechanism
+        throw error;
     }
 }
 
