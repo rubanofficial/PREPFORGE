@@ -1,6 +1,6 @@
+import './config/env.js'  // MUST be first — loads .env before any other module reads process.env
 import express from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server as SocketServer } from 'socket.io'
 import connectDB from './config/database.js'
@@ -9,7 +9,7 @@ import leetcodeRoutes from './routes/leetcodeRoutes.js'
 import { setIO } from './socketManager.js'
 import { startSyncWorker } from './workers/syncWorker.js'
 
-dotenv.config()
+// dotenv.config() is now called in config/env.js (imported first above)
 
 const app = express()
 const httpServer = createServer(app)
