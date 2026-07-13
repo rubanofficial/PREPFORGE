@@ -1,5 +1,5 @@
 import { Worker } from 'bullmq';
-import redisConnection from '../config/redis.js';
+import { createRedisConnection } from '../config/redis.js';
 import backgroundSyncService from '../services/sync/backgroundSyncService.js';
 import deepSyncService from '../services/sync/deepSyncService.js';
 import SyncJob from '../models/SyncJob.js';
@@ -125,7 +125,7 @@ export function startSyncWorker() {
     },
     {
       // Worker configuration
-      connection: redisConnection,
+      connection: createRedisConnection('SyncWorker'),
       concurrency: 3,            // Process up to 3 syncs simultaneously
       lockDuration: 30000,       // 30s lock — job can't be stolen if still processing
       stalledInterval: 15000,    // Check every 15s for stalled jobs

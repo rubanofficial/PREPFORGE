@@ -113,27 +113,24 @@ function retryStrategy(times) {
   return delay;
 }
 
-function createRedisConnection() {
+function createRedisConnection(connectionName = 'Redis') {
+  let connection;
+
   // ── PRIORITY PATH: REDIS_URL is set (covers Upstash + Render + Railway) ──
   if (process.env.REDIS_URL) {
     const url = process.env.REDIS_URL;
 
-    // Detect Upstash (or any TLS Redis) by the "rediss://" scheme.
-    // "rediss" (double-s) is the IANA-registered scheme for Redis over TLS.
-    // Local Docker uses "redis://" (single-s) — no TLS needed there.
-    const isTLS = url.startsWith('rediss://');
+    // Detect Upstash (or any TLS Redis) by the "rediss://" scheme or upstash.io domain.
+    const isTLS = url.startsWith('rediss://') || url.includes('upstash.io');
 
-    console.log(`📦 Redis: Connecting via REDIS_URL ${isTLS ? '(TLS/Upstash)' : '(plain)'}`);
+    console.log(`📦 ${connectionName}: Connecting via REDIS_URL ${isTLS ? '(TLS/Upstash)' : '(plain)'}`);
 
-    return new IORedis(url, {
+    connection = new IORedis(url, {
       // ── BullMQ hard requirements ─────────────────────────────────────
       maxRetriesPerRequest: null,   // BullMQ manages retries; IORedis must not
       enableReadyCheck: false,      // Prevents race with BullMQ's setup sequence
 
       // ── TLS: Required for Upstash; skipped for plain redis:// ────────
-      // Passing an empty object `{}` tells IORedis to use Node's built-in
-      // TLS with default CA verification. Upstash uses valid Let's Encrypt
-      // certificates, so no rejectUnauthorized override is needed.
       ...(isTLS && { tls: {} }),
 
       // ── Cloud-friendly connection settings ───────────────────────────
@@ -143,57 +140,36 @@ function createRedisConnection() {
       // ── Reconnection ─────────────────────────────────────────────────
       retryStrategy,
     });
+  } else {
+    // ── FALLBACK PATH: Individual env vars or localhost defaults ──────────────
+    const host = process.env.REDIS_HOST || 'localhost';
+    const port = parseInt(process.env.REDIS_PORT, 10) || 6379;
+    const password = process.env.REDIS_PASSWORD || undefined;
+
+    console.log(`📦 ${connectionName}: Connecting to ${host}:${port} (no TLS)`);
+
+    connection = new IORedis({
+      host,
+      port,
+      password,
+
+      // ── BullMQ hard requirements (same as above) ──────────────────────
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+
+      // ── Reconnection ─────────────────────────────────────────────────
+      retryStrategy,
+    });
   }
 
-  // ── FALLBACK PATH: Individual env vars or localhost defaults ──────────────
-  // Used for local development when REDIS_URL is not set.
-  const host = process.env.REDIS_HOST || 'localhost';
-  const port = parseInt(process.env.REDIS_PORT, 10) || 6379;
-  const password = process.env.REDIS_PASSWORD || undefined;
+  // Attach event listeners to this specific connection
+  connection.on('connect', () => console.log(`✅ ${connectionName}: Connected successfully`));
+  connection.on('ready', () => console.log(`✅ ${connectionName}: Connection ready`));
+  connection.on('error', (err) => console.error(`❌ ${connectionName}: Connection error:`, err.message));
+  connection.on('close', () => console.warn(`⚠️  ${connectionName}: Connection closed`));
+  connection.on('reconnecting', () => console.log(`🔄 ${connectionName}: Reconnecting...`));
 
-  console.log(`📦 Redis: Connecting to ${host}:${port} (no TLS)`);
-
-  return new IORedis({
-    host,
-    port,
-    password,
-
-    // ── BullMQ hard requirements (same as above) ──────────────────────
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-
-    // ── Reconnection ─────────────────────────────────────────────────
-    retryStrategy,
-  });
+  return connection;
 }
 
-// ── Create and export the singleton connection ────────────────────────────────
-// Both syncQueue.js and syncWorker.js import this exact object.
-// BullMQ does NOT accept separate connection options per command — it reuses
-// this connection for all Lua scripts, BLPOP polling, and key operations.
-const connection = createRedisConnection();
-
-connection.on('connect', () => {
-  console.log('✅ Redis: Connected successfully');
-});
-
-connection.on('ready', () => {
-  console.log('✅ Redis: Connection ready — BullMQ can now accept jobs');
-});
-
-connection.on('error', (err) => {
-  // Log but don't crash — retryStrategy handles reconnection automatically.
-  // BullMQ also listens to this event and pauses job processing until
-  // the connection recovers.
-  console.error('❌ Redis: Connection error:', err.message);
-});
-
-connection.on('close', () => {
-  console.warn('⚠️  Redis: Connection closed');
-});
-
-connection.on('reconnecting', () => {
-  console.log('🔄 Redis: Reconnecting...');
-});
-
-export default connection;
+export { createRedisConnection };

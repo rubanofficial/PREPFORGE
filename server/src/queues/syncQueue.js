@@ -1,9 +1,9 @@
 import { Queue } from 'bullmq';
-import redisConnection from '../config/redis.js';
+import { createRedisConnection } from '../config/redis.js';
 
 
 const syncQueue = new Queue('sync', {
-  connection: redisConnection,
+  connection: createRedisConnection('SyncQueue'),
   defaultJobOptions: {
     // Retry policy — handled at the queue level so every job gets it automatically
     attempts: 3,
