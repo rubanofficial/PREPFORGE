@@ -3,10 +3,25 @@ services:
     name: prepforge-server
     env: node
     plan: free
+
     buildCommand: npm run install-all && npm run build
     startCommand: npm start
+
     envVars:
       - key: NODE_ENV
         value: production
+
       - key: PORT
         value: 10000
+
+      - key: REDIS_HOST
+        value: equipped-coral-145264.upstash.io
+
+      - key: REDIS_PORT
+        value: "6379"
+
+      - key: REDIS_USERNAME
+        value: default
+
+      - key: REDIS_PASSWORD
+        sync: false
