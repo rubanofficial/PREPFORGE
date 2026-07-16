@@ -14,14 +14,17 @@ services:
       - key: PORT
         value: 10000
 
-      - key: REDIS_HOST
-        value: equipped-coral-145264.upstash.io
+      - key: REDIS_URL
+        sync: false
 
-      - key: REDIS_PORT
-        value: "6379"
+      - key: MONGODB_URI
+        sync: false
 
-      - key: REDIS_USERNAME
-        value: default
+      - key: JWT_SECRET
+        sync: false
 
-      - key: REDIS_PASSWORD
+      - key: GEMINI_API_KEY
+        sync: false
+
+      - key: CLIENT_URL
         sync: false
