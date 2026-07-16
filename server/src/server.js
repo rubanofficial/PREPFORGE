@@ -22,6 +22,9 @@ const corsOrigins = process.env.CORS_ORIGIN
 const corsOptions = {
     origin: corsOrigins,
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 200, // For legacy browser (IE11) + some Axios preflight compatibility
 }
 
 const io = new SocketServer(httpServer, {

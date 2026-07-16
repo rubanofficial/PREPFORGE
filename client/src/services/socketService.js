@@ -29,7 +29,7 @@ if (isProduction && !import.meta.env.VITE_SOCKET_URL) {
     console.error(
         '⚠️ [PrepForge] VITE_SOCKET_URL is not set in production!\n' +
         'Socket.IO will try to connect to the Vercel frontend URL which does NOT serve sockets.\n' +
-        'Add VITE_SOCKET_URL=https://prepforge-29le.onrender.com to your Vercel environment variables.'
+        'Add VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com to your Vercel environment variables.'
     );
 }
 

@@ -15,7 +15,7 @@ if (isProduction) {
     if (!import.meta.env.VITE_API_URL) {
         console.warn(
             '⚠️ [PrepForge] VITE_API_URL is not set. Using "/api" with vercel.json rewrites.\n' +
-            'If requests fail, add VITE_API_URL=https://prepforge-29le.onrender.com/api ' +
+            'If requests fail, add VITE_API_URL=https://prepforge-1-0mkx.onrender.com/api ' +
             'to your Vercel environment variables.'
         );
     }
