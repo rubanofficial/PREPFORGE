@@ -57,6 +57,7 @@ async function initializeAuthenticatedConnection(encryptedSession) {
 
         // Create LeetCode client with authenticated credential
         const leetcode = new LeetCode(credential);
+        leetcode.sessionToken = sessionCookie; // Attach for REST API use
 
         // Verify authentication by calling whoami()
         // This confirms the session is actually valid before we try submissions
@@ -176,32 +177,23 @@ const SUBMISSIONS_QUERY = `query ($offset: Int!, $limit: Int!, $slug: String) {
  */
 async function fetchSubmissions(leetcodeClient, offset = 0, limit = BATCH_SIZE) {
     try {
-        console.log(`\n📡 CALLING GraphQL submissionList with offset=${offset}, limit=${limit}`);
+        console.log(`\n📡 CALLING REST API /api/submissions/ with offset=${offset}, limit=${limit}`);
 
-        // Call GraphQL directly to avoid the library's internal crash
-        const response = await leetcodeClient.graphql({
-            variables: {
-                offset,
-                limit,
-            },
-            query: SUBMISSIONS_QUERY,
+        const response = await fetch(`https://leetcode.com/api/submissions/?offset=${offset}&limit=${limit}`, {
+            headers: {
+                'Cookie': `LEETCODE_SESSION=${leetcodeClient.sessionToken}`,
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0'
+            }
         });
 
-        console.log(`✅ GraphQL response received`);
+        console.log(`✅ REST API response received: ${response.status}`);
 
-        // Check for GraphQL errors
-        if (response.errors && response.errors.length > 0) {
-            const errorMsg = response.errors.map(e => e.message).join('; ');
-            console.error(`❌ GraphQL errors: ${errorMsg}`);
+        if (!response.ok) {
+            const errorMsg = `HTTP ${response.status} ${response.statusText}`;
+            console.error(`❌ REST API error: ${errorMsg}`);
 
-            // Check if it's an auth error
-            const isAuthError = response.errors.some(e =>
-                e.message?.toLowerCase().includes('unauthorized') ||
-                e.message?.toLowerCase().includes('not logged in') ||
-                e.message?.toLowerCase().includes('authentication')
-            );
-
-            if (isAuthError) {
+            if (response.status === 401 || response.status === 403) {
                 return {
                     submissions: [],
                     hasMore: false,
@@ -212,69 +204,55 @@ async function fetchSubmissions(leetcodeClient, offset = 0, limit = BATCH_SIZE) 
                     },
                 };
             }
+            
+            if (response.status === 429) {
+                 return {
+                    submissions: [],
+                    hasMore: false,
+                    error: {
+                        type: 'RATE_LIMITED',
+                        message: `Rate limited: ${errorMsg}`,
+                        recoverable: true,
+                    },
+                };
+            }
 
             return {
                 submissions: [],
                 hasMore: false,
                 error: {
-                    type: 'GRAPHQL_ERROR',
-                    message: `GraphQL error: ${errorMsg}`,
+                    type: 'NETWORK_ERROR',
+                    message: `Network error: ${errorMsg}`,
                     recoverable: true,
                 },
             };
         }
 
-        const data = response.data;
-
-        // Check if data itself is null/undefined
-        if (!data) {
-            console.warn(`⚠️  GraphQL response has no data field`);
-            console.warn(`   Full response keys: ${Object.keys(response).join(', ')}`);
-            return {
-                submissions: [],
-                hasMore: false,
-                error: {
-                    type: 'AUTHENTICATION_FAILED',
-                    message: 'LeetCode returned empty data. Session may be expired.',
-                    recoverable: false,
-                },
-            };
+        let data;
+        try {
+            data = await response.json();
+        } catch (parseError) {
+             console.error(`❌ Failed to parse JSON from LeetCode API`);
+             return {
+                 submissions: [],
+                 hasMore: false,
+                 error: {
+                     type: 'NETWORK_ERROR',
+                     message: 'Failed to parse response from LeetCode',
+                     recoverable: true
+                 }
+             };
         }
 
-        // Check if submissionList is null/undefined
-        if (!data.submissionList) {
-            console.warn(`⚠️  data.submissionList is null/undefined`);
-            console.warn(`   data keys: ${Object.keys(data).join(', ')}`);
-            console.warn(`   data.submissionList value: ${data.submissionList}`);
-            return {
-                submissions: [],
-                hasMore: false,
-                error: {
-                    type: 'AUTHENTICATION_FAILED',
-                    message: 'LeetCode returned null submissionList. Session is likely expired or invalid. Please re-authenticate.',
-                    recoverable: false,
-                },
-            };
-        }
-
-        // Debug: Log the entire submissionList structure
-        console.log(`📋 DEBUG submissionList keys: ${Object.keys(data.submissionList).join(', ')}`);
-        console.log(`📋 DEBUG submissionList.hasNext: ${data.submissionList.hasNext}`);
-        console.log(`📋 DEBUG submissionList.submissions type: ${typeof data.submissionList.submissions}`);
-        console.log(`📋 DEBUG submissionList.submissions isArray: ${Array.isArray(data.submissionList.submissions)}`);
-        console.log(`📋 DEBUG submissionList FULL VALUE: ${JSON.stringify(data.submissionList).substring(0, 500)}`);
-
-        // Check if submissions array is null/undefined
-        const rawSubmissions = data.submissionList.submissions;
-        const hasNext = data.submissionList.hasNext || false;
+        const rawSubmissions = data.submissions_dump;
+        const hasNext = data.has_next || false;
 
         if (!rawSubmissions || !Array.isArray(rawSubmissions)) {
-            console.warn(`⚠️  submissions is null or not an array: ${typeof rawSubmissions}`);
-            console.warn(`   Value: ${JSON.stringify(rawSubmissions).substring(0, 300)}`);
+            console.warn(`⚠️  submissions is null or not an array`);
             return {
                 submissions: [],
                 hasMore: false,
-                error: null, // Could be genuinely empty
+                error: null,
             };
         }
 
@@ -287,14 +265,16 @@ async function fetchSubmissions(leetcodeClient, offset = 0, limit = BATCH_SIZE) 
             };
         }
 
-        // Normalize the submissions (same transforms the library does)
+        // Normalize the submissions
         const parsedSubmissions = rawSubmissions.map(sub => ({
             ...sub,
             id: parseInt(sub.id, 10),
             timestamp: parseInt(sub.timestamp, 10) * 1000,
-            isPending: sub.isPending !== 'Not Pending',
+            isPending: sub.is_pending !== 'Not Pending',
             runtime: parseInt(sub.runtime, 10) || 0,
             memory: parseFloat(sub.memory) || 0,
+            statusDisplay: sub.status_display,
+            titleSlug: sub.title_slug,
         }));
 
         console.log(`✅ Successfully parsed ${parsedSubmissions.length} submissions`);
