@@ -1,5 +1,6 @@
 import './config/env.js'  // MUST be first — loads .env before any other module reads process.env
 import express from 'express'
+import helmet from 'helmet'
 import cors from 'cors'
 import { createServer } from 'http'
 import { Server as SocketServer } from 'socket.io'
@@ -14,6 +15,20 @@ import { startSyncWorker } from './workers/syncWorker.js'
 const app = express()
 const httpServer = createServer(app)
 
+// ── Trust Proxy ──────────────────────────────────────────────────────────
+// Required when running behind a reverse proxy (Render, Nginx, etc.):
+//   - Ensures req.ip reflects the true client IP (not the proxy's IP)
+//   - Enables correct secure cookie behavior behind HTTPS proxies
+//   - Used by express-rate-limit and helmet to derive accurate client info
+app.set('trust proxy', 1)
+
+// ── Security Headers (Helmet) ────────────────────────────────────────────
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow cross-origin for frontend
+    contentSecurityPolicy: false, // Disabled for API server (handled by frontend if needed)
+}))
+
+// ── CORS Configuration ──────────────────────────────────────────────────
 // Parse CORS origins from environment variable
 const corsOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
@@ -71,9 +86,40 @@ io.on('connection', (socket) => {
     })
 })
 
-// Error handling middleware
+// ── Global Error Handling Middleware ─────────────────────────────────────
 app.use((err, req, res, next) => {
-    console.error(err.stack)
+    console.error(`[ERROR] ${err.name}: ${err.message}`)
+    if (process.env.NODE_ENV === 'development') {
+        console.error(err.stack)
+    }
+
+    // Handle Mongoose validation errors
+    if (err.name === 'ValidationError') {
+        return res.status(400).json({
+            success: false,
+            message: Object.values(err.errors).map(e => e.message).join(', '),
+            error: process.env.NODE_ENV === 'development' ? err.message : {},
+        })
+    }
+
+    // Handle Mongoose duplicate key errors
+    if (err.code === 11000) {
+        const field = Object.keys(err.keyValue)[0]
+        return res.status(409).json({
+            success: false,
+            message: `Duplicate value for ${field}. This ${field} is already taken.`,
+            error: process.env.NODE_ENV === 'development' ? err.message : {},
+        })
+    }
+
+    // Handle Mongoose cast errors (invalid ObjectId, etc.)
+    if (err.name === 'CastError') {
+        return res.status(400).json({
+            success: false,
+            message: `Invalid ${err.path}: ${err.value}`,
+            error: process.env.NODE_ENV === 'development' ? err.message : {},
+        })
+    }
 
     const statusCode = err.statusCode || 500
     const message = err.message || 'Something went wrong!'
@@ -89,7 +135,9 @@ const PORT = process.env.PORT || 5000
 
 httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`)
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`)
     console.log(`📡 Socket.io server active`)
+    console.log(`🔗 CORS origins: ${corsOrigins.join(', ')}`)
 
     // Start the BullMQ sync worker to process queued sync jobs
     startSyncWorker()

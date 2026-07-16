@@ -13,7 +13,12 @@ const router = express.Router()
 // Public routes
 router.post('/register', register)
 router.post('/login', login)
-router.get('/debug/users', debugListUsers)
+
+// Debug route — only available in non-production environments
+// !!! Never expose user data via a public route in production !!!
+if (process.env.NODE_ENV !== 'production') {
+    router.get('/debug/users', debugListUsers)
+}
 
 // Protected routes
 router.get('/profile', protect, getProfile)

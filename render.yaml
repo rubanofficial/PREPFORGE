@@ -4,18 +4,21 @@ services:
     env: node
     plan: free
 
-    buildCommand: npm run install-all && npm run build
-    startCommand: npm start
+    # ── BUILD ─────────────────────────────────────────────────────────────
+    # Install ONLY server dependencies. Do NOT build the frontend —
+    # Vercel handles the frontend deployment.
+    buildCommand: npm install --prefix server
 
+    # ── START ─────────────────────────────────────────────────────────────
+    startCommand: node server/src/server.js
+
+    # ── ENVIRONMENT VARIABLES ─────────────────────────────────────────────
     envVars:
       - key: NODE_ENV
         value: production
 
       - key: PORT
         value: 10000
-
-      - key: REDIS_URL
-        sync: false
 
       - key: MONGODB_URI
         sync: false
@@ -26,10 +29,17 @@ services:
       - key: GEMINI_API_KEY
         sync: false
 
-      - key: CLIENT_URL
+      - key: ENCRYPTION_KEY
+        sync: false
+
+      - key: REDIS_URL
         sync: false
 
       # CORS: comma-separated list of allowed frontend origins.
-      # Override this in the Render dashboard if your Vercel URL changes.
+      # MUST match your actual Vercel frontend URL.
       - key: CORS_ORIGIN
         value: "https://prepforge-qszo.vercel.app,http://localhost:5173"
+
+      # CLIENT_URL is a convenience alias used if your code references it.
+      - key: CLIENT_URL
+        value: "https://prepforge-qszo.vercel.app"

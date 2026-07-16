@@ -2,7 +2,7 @@ import axios from 'axios'
 
 // ── API Base URL Resolution ───────────────────────────────────────────────
 // DEV:  VITE_API_URL is unset → falls back to '/api' → Vite proxy forwards to localhost:5000
-// PROD: VITE_API_URL must be set in Vercel dashboard: https://prepforge-29le.onrender.com/api
+// PROD: VITE_API_URL must be set in Vercel dashboard: https://prepforge-1-0mkx.onrender.com/api
 //       OR rely on vercel.json rewrite rules to forward /api/* to Render (no env var needed).
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -13,10 +13,8 @@ const isProduction = typeof window !== 'undefined' &&
 if (isProduction) {
     console.log(`[PrepForge] API baseURL: ${API_URL}`);
     if (!import.meta.env.VITE_API_URL) {
-        console.warn(
-            '⚠️ [PrepForge] VITE_API_URL is not set. Using "/api" with vercel.json rewrites.\n' +
-            'If requests fail, add VITE_API_URL=https://prepforge-1-0mkx.onrender.com/api ' +
-            'to your Vercel environment variables.'
+        console.log(
+            '[PrepForge] Using "/api" fallback — requests proxied through vercel.json rewrites to Render.'
         );
     }
 } else {

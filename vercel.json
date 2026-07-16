@@ -1,11 +1,15 @@
 {
-    "buildCommand": "npm run build",
+    "buildCommand": "cd client && npm install && npm run build",
     "outputDirectory": "client/dist",
     "framework": "vite",
     "rewrites": [
         {
             "source": "/api/:path*",
             "destination": "https://prepforge-1-0mkx.onrender.com/api/:path*"
+        },
+        {
+            "source": "/socket.io/:path*",
+            "destination": "https://prepforge-1-0mkx.onrender.com/socket.io/:path*"
         },
         {
             "source": "/(.*)",

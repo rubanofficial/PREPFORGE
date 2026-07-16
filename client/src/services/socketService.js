@@ -12,24 +12,32 @@ import { io } from 'socket.io-client';
  *       → Vite proxy forwards /socket.io to localhost:5000 (ws: true in vite.config.js)
  *
  * PROD: VITE_SOCKET_URL must be set in the Vercel dashboard to the Render URL:
- *       VITE_SOCKET_URL=https://prepforge-29le.onrender.com
- *       Without this, the socket would try to connect to the Vercel CDN
- *       which does NOT run Socket.IO — connections would silently fail.
+ *       VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com
+ *       Without this, the socket will fall back to the Vercel CDN which does
+ *       NOT run Socket.IO — Socket.IO connections will fail.
+ *
+ *       Vercel rewrites (vercel.json) will forward /socket.io/* to Render,
+ *       but only for HTTP long-polling transport (WebSocket upgrade is not
+ *       supported through Vercel rewrites). For WebSocket support, set
+ *       VITE_SOCKET_URL to the Render URL directly.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
 // Detect whether we're running on a deployed (production) environment.
-// If VITE_SOCKET_URL is not configured in production, connections will fail silently.
-const isProduction = !window.location.hostname.includes('localhost') &&
+const isProduction = typeof window !== 'undefined' &&
+    !window.location.hostname.includes('localhost') &&
     !window.location.hostname.includes('127.0.0.1');
 
+// URL resolution priority:
+//   1. VITE_SOCKET_URL env var (set in Vercel dashboard)
+//   2. window.location.origin (falls back to Vercel URL → relies on vercel.json rewrites)
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || window.location.origin;
 
 if (isProduction && !import.meta.env.VITE_SOCKET_URL) {
-    console.error(
-        '⚠️ [PrepForge] VITE_SOCKET_URL is not set in production!\n' +
-        'Socket.IO will try to connect to the Vercel frontend URL which does NOT serve sockets.\n' +
-        'Add VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com to your Vercel environment variables.'
+    console.warn(
+        '⚠️ [PrepForge] VITE_SOCKET_URL is not set. Socket.IO will use vercel.json rewrites.\n' +
+        'For WebSocket support, add VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com ' +
+        'to your Vercel environment variables.'
     );
 }
 
@@ -49,15 +57,17 @@ const socketService = {
         }
 
         socket = io(SOCKET_URL, {
-            // Let socket.io use the Vite proxy path (/socket.io)
             path: '/socket.io',
-            transports: ['websocket', 'polling'],
-            reconnectionAttempts: 5,
+            // Use polling first (works through Vercel rewrites), then upgrade to WebSocket
+            transports: ['polling', 'websocket'],
+            reconnectionAttempts: 10,
             reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000,
         });
 
         socket.on('connect', () => {
-            console.log('🔌 Socket connected:', socket.id);
+            console.log('🔌 Socket connected:', socket.id, 'to', SOCKET_URL);
         });
 
         socket.on('connect_error', (err) => {
