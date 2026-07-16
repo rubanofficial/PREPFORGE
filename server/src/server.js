@@ -32,7 +32,7 @@ app.use(helmet({
 // Parse CORS origins from environment variable
 const corsOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-    : ['http://localhost:5173']
+    : ['http://localhost:5173', "https://prepforge-ua5k.vercel.app"]
 
 const corsOptions = {
     origin: corsOrigins,
