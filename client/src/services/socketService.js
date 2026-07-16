@@ -7,15 +7,31 @@ import { io } from 'socket.io-client';
  * Components/hooks import this and call helpers — they never
  * create their own connections.
  *
- * DEV:  Client on :5173, Vite proxies /socket.io → :5000
- * PROD: Client and server on same origin, no proxy needed
+ * ── URL Resolution ──────────────────────────────────────────────────────────
+ * DEV:  VITE_SOCKET_URL is not set → falls back to window.location.origin
+ *       → Vite proxy forwards /socket.io to localhost:5000 (ws: true in vite.config.js)
  *
- * In BOTH cases we connect to window.location.origin so the
- * Vite WebSocket proxy (ws: true) handles the upgrade correctly.
- * Set VITE_SOCKET_URL to override (e.g. staging environments).
+ * PROD: VITE_SOCKET_URL must be set in the Vercel dashboard to the Render URL:
+ *       VITE_SOCKET_URL=https://prepforge-29le.onrender.com
+ *       Without this, the socket would try to connect to the Vercel CDN
+ *       which does NOT run Socket.IO — connections would silently fail.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 
+// Detect whether we're running on a deployed (production) environment.
+// If VITE_SOCKET_URL is not configured in production, connections will fail silently.
+const isProduction = !window.location.hostname.includes('localhost') &&
+    !window.location.hostname.includes('127.0.0.1');
+
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || window.location.origin;
+
+if (isProduction && !import.meta.env.VITE_SOCKET_URL) {
+    console.error(
+        '⚠️ [PrepForge] VITE_SOCKET_URL is not set in production!\n' +
+        'Socket.IO will try to connect to the Vercel frontend URL which does NOT serve sockets.\n' +
+        'Add VITE_SOCKET_URL=https://prepforge-29le.onrender.com to your Vercel environment variables.'
+    );
+}
 
 let socket = null;
 

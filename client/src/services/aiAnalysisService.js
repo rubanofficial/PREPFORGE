@@ -1,11 +1,12 @@
-import axios from 'axios';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+import apiClient from './apiClient';
 
 /**
  * Get AI-powered performance analysis from Gemini
  * Analyzes user's LeetCode problem-solving patterns
- * 
+ *
+ * Uses the shared apiClient (which reads VITE_API_URL or falls back to '/api')
+ * so this always hits the correct backend in both dev and production.
+ *
  * Returns:
  * {
  *   success: boolean,
@@ -37,15 +38,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
  */
 export async function getPerformanceAnalysis() {
     try {
-        const response = await axios.get(
-            `${API_BASE_URL}/leetcode/ai-analysis`,
-            {
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                }
-            }
-        );
-
+        // apiClient already sets baseURL from VITE_API_URL (or '/api' fallback)
+        // and attaches Authorization: Bearer <token> via its request interceptor.
+        const response = await apiClient.get('/leetcode/ai-analysis');
         return response.data;
     } catch (error) {
         if (error.response?.status === 404) {
@@ -60,15 +55,9 @@ export async function getPerformanceAnalysis() {
  */
 export async function getDashboardStats() {
     try {
-        const response = await axios.get(
-            `${API_BASE_URL}/leetcode/dashboard`,
-            {
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                }
-            }
-        );
-
+        // apiClient already sets baseURL from VITE_API_URL (or '/api' fallback)
+        // and attaches Authorization: Bearer <token> via its request interceptor.
+        const response = await apiClient.get('/leetcode/dashboard');
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Failed to get dashboard stats');
