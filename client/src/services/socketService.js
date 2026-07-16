@@ -12,7 +12,7 @@ import { io } from 'socket.io-client';
  *       → Vite proxy forwards /socket.io to localhost:5000 (ws: true in vite.config.js)
  *
  * PROD: VITE_SOCKET_URL must be set in the Vercel dashboard to the Render URL:
- *       VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com
+ *       VITE_SOCKET_URL=https://prepforge-hvgs.onrender.com
  *       Without this, the socket will fall back to the Vercel CDN which does
  *       NOT run Socket.IO — Socket.IO connections will fail.
  *
@@ -36,7 +36,7 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || window.location.origin;
 if (isProduction && !import.meta.env.VITE_SOCKET_URL) {
     console.warn(
         '⚠️ [PrepForge] VITE_SOCKET_URL is not set. Socket.IO will use vercel.json rewrites.\n' +
-        'For WebSocket support, add VITE_SOCKET_URL=https://prepforge-1-0mkx.onrender.com ' +
+        'For WebSocket support, add VITE_SOCKET_URL=https://prepforge-hvgs.onrender.com ' +
         'to your Vercel environment variables.'
     );
 }

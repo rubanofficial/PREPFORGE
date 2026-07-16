@@ -2,7 +2,7 @@ import axios from 'axios'
 
 // ── API Base URL Resolution ───────────────────────────────────────────────
 // DEV:  VITE_API_URL is unset → falls back to '/api' → Vite proxy forwards to localhost:5000
-// PROD: VITE_API_URL must be set in Vercel dashboard: https://prepforge-1-0mkx.onrender.com/api
+// PROD: VITE_API_URL must be set in Vercel dashboard: https://prepforge-hvgs.onrender.com/api
 //       OR rely on vercel.json rewrite rules to forward /api/* to Render (no env var needed).
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
