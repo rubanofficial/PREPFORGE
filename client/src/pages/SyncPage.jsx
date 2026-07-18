@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import SyncProgressCard from '../components/UI/SyncProgressCard';
 import {
     Database, Zap, RefreshCw, ShieldCheck, GitMerge,
-    CheckCircle2, Clock, ArrowRight, Info, Layers
+    CheckCircle2, Clock, ArrowRight, Info, Layers,
+    Key, AlertTriangle, Settings
 } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { startSync, updateSyncStatus, setSyncInfo } from '../features/sync/syncSlice';
@@ -62,6 +64,7 @@ const relativeTime = (iso) => {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const SyncPage = () => {
+    const navigate = useNavigate();
     const dispatch = useDispatch();
     const { status, progressPercent, progress, syncMode, lastSyncAt, localCount } =
         useSelector((state) => state.sync);
@@ -130,28 +133,68 @@ const SyncPage = () => {
     const effectiveLastSyncAt = syncInfo?.lastSyncAt || lastSyncAt;
     const isIncremental = effectiveSyncMode === 'incremental';
 
+    const hasSession = !!syncInfo?.leetcodeUsername;
+
     return (
         <div className="space-y-6 max-w-4xl mx-auto">
             <header>
                 <h1 className="text-2xl font-bold tracking-tight text-textMain">Sync Engine</h1>
                 <p className="text-sm text-textMuted mt-1">
-                    Incremental data ingestion from LeetCode — only fetches what's new.
+                    Authenticated data ingestion from LeetCode using your session — fetches your full submission history with true pagination.
                 </p>
             </header>
+
+            {/* ── Session Required Banner ──────────────────────────────────── */}
+            {!infoLoading && !hasSession && (
+                <div className="bg-warning/10 border border-warning/30 rounded-xl p-5">
+                    <div className="flex items-start gap-4">
+                        <div className="p-2 bg-warning/20 rounded-lg shrink-0">
+                            <AlertTriangle size={20} className="text-warning" />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="text-sm font-bold text-warning mb-1">LeetCode Session Required</h3>
+                            <p className="text-sm text-textMuted mb-3">
+                                The sync engine now requires an authenticated LeetCode session to fetch your full submission history with pagination. 
+                                Please save your LEETCODE_SESSION cookie in Settings first.
+                            </p>
+                            <button
+                                onClick={() => navigate('/settings')}
+                                className="inline-flex items-center gap-2 bg-warning/20 hover:bg-warning/30 text-warning text-sm font-semibold px-4 py-2 rounded-lg transition-all duration-200"
+                            >
+                                <Settings size={15} />
+                                Go to Settings
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Session active indicator ──────────────────────────────────── */}
+            {!infoLoading && hasSession && (
+                <div className="bg-success/10 border border-success/30 rounded-xl p-4 flex items-center gap-3">
+                    <div className="p-2 bg-success/20 rounded-lg">
+                        <Key size={16} className="text-success" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-semibold text-success">Authenticated as <span className="font-mono">{syncInfo.leetcodeUsername}</span></p>
+                        <p className="text-xs text-textMuted">Session is stored. You can sync your full LeetCode history.</p>
+                    </div>
+                </div>
+            )}
 
             {/* ── Concept badges row ───────────────────────────────────────── */}
             <div className="flex flex-wrap gap-2">
                 <ConceptBadge
                     icon={GitMerge}
-                    label="Delta Sync"
+                    label="Paginated Sync"
                     color="text-primary border-primary/30 bg-primary/5"
-                    description="Only the difference (delta) between last sync and now is fetched — not your full history."
+                    description="Fetches submissions in batches of 20 using LeetCode's REST API with offset/limit pagination."
                 />
                 <ConceptBadge
                     icon={RefreshCw}
-                    label="Change Detection"
+                    label="Session Auth"
                     color="text-primary border-primary/30 bg-primary/5"
-                    description="Backend compares LeetCode's newest submissions against a stored watermark timestamp."
+                    description="Uses your encrypted LEETCODE_SESSION cookie for authenticated API access. No public API dependency."
                 />
                 <ConceptBadge
                     icon={ShieldCheck}
@@ -167,9 +210,9 @@ const SyncPage = () => {
                 />
                 <ConceptBadge
                     icon={Zap}
-                    label="Incremental Fetch"
+                    label="Metadata Enrichment"
                     color="text-primary border-primary/30 bg-primary/5"
-                    description="LeetCode returns submissions newest-first; we early-exit the moment we hit an already-synced problem."
+                    description="After fetching submissions, we enrich them with difficulty and topic tags via GraphQL metadata queries."
                 />
             </div>
 
@@ -182,14 +225,14 @@ const SyncPage = () => {
                         <div className="flex items-center gap-3">
                             <h2 className="text-lg font-semibold text-textMain flex items-center gap-2">
                                 <Database size={20} className="text-primary" />
-                                {isIncremental ? 'Incremental Sync Ready' : 'Full Sync'}
+                                {isIncremental ? 'Incremental Sync Ready' : 'Authenticated Sync'}
                             </h2>
                             {!infoLoading && <SyncModeBadge mode={effectiveSyncMode} />}
                         </div>
                         <p className="text-sm text-textMuted max-w-lg">
                             {isIncremental
-                                ? 'Your data is up to date. Only new problems solved since last sync will be fetched.'
-                                : 'First-time sync — your entire submission history will be imported.'}
+                                ? 'Your data is up to date. Only new problems solved since last sync will be fetched via pagination.'
+                                : 'First-time sync — your entire submission history will be fetched via paginated LeetCode API.'}
                         </p>
                     </div>
 
@@ -274,16 +317,16 @@ const SyncPage = () => {
                         <div className="flex items-center gap-2 mb-3">
                             <Info size={14} className="text-textMuted" />
                             <p className="text-xs font-semibold text-textMuted uppercase tracking-wider">
-                                How Incremental Sync Works
+                                How Paginated Sync Works
                             </p>
                         </div>
                         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 text-xs text-textMuted">
                             {[
-                                { step: '1', text: 'Fetch stats to get total count' },
-                                { step: '2', text: 'Read watermark timestamp' },
-                                { step: '3', text: 'Fetch batches (newest first)' },
-                                { step: '4', text: 'Early-exit at watermark' },
-                                { step: '5', text: 'Insert only new problems' },
+                                { step: '1', text: 'Initialize authenticated session' },
+                                { step: '2', text: 'Fetch profile to get total count' },
+                                { step: '3', text: 'Paginated fetch (offset/limit)' },
+                                { step: '4', text: 'Enrich metadata (difficulty, topics)' },
+                                { step: '5', text: 'Insert deduplicated problems' },
                             ].map(({ step, text }, i, arr) => (
                                 <React.Fragment key={step}>
                                     <div className="flex items-center gap-2">

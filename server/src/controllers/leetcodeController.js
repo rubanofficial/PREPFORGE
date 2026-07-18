@@ -424,75 +424,75 @@ const getUserProblems = asyncHandler(async (req, res, next) => {
 
 /**
  * POST /api/leetcode/start-sync
- * Start background LeetCode sync job
+ * Start authenticated LeetCode sync using stored session
+ *
+ * Uses the encrypted LEETCODE_SESSION cookie to fetch ALL submissions
+ * with true pagination (offset/limit via LeetCode's REST API).
  *
  * RETURNS IMMEDIATELY without waiting for sync to complete
  *
  * Flow:
- * 1. Create SyncJob document (pending)
- * 2. Spawn background sync task (NOT awaited)
- * 3. Return syncJobId to client
- * 4. Client can poll GET /sync-status/:syncJobId for progress
+ * 1. Verify user has stored session
+ * 2. Create SyncJob document (pending)
+ * 3. Enqueue deep sync to BullMQ (NOT awaited)
+ * 4. Return syncJobId to client
+ * 5. Client can poll GET /sync-status/:syncJobId for progress
  *
- * WHY THIS WORKS:
- * - Request lifecycle: User gets response in <100ms
- * - Background task: Processes batches independently
- * - Scalability: Multiple users can sync simultaneously
- * - UX: No timeout waiting for long syncs
- * - Foundation: Can upgrade to queue systems later
+ * WHY AUTHENTICATED?
+ * - Public Alfa LeetCode API is unreliable (cold starts, rate limits)
+ * - Authenticated REST API has true pagination (offset/limit)
+ * - Session ensures we fetch ALL submissions, not just a limited set
+ * - Enables metadata enrichment (difficulty, topics) via GraphQL
  */
 const startBackgroundSync = asyncHandler(async (req, res, next) => {
     const userId = req.user.userId;
 
-    // Username can come from body OR from the stored User record (same as deep-sync)
-    let username = req.body?.leetcodeUsername?.trim();
-
-    if (!username) {
-        // Fall back to the stored leetcodeUsername on the User document
-        const userRecord = await User.findById(userId).select('leetcodeUsername');
-        if (!userRecord) return next(new AppError('User not found', 404));
-        username = userRecord.leetcodeUsername;
-    }
-
-    if (!username || typeof username !== 'string') {
-        return next(new AppError('LeetCode username is required. Please set it in Settings.', 400));
-    }
-
-    if (username.length < 2 || username.length > 50) {
-        return next(new AppError('Username must be 2-50 characters', 400));
-    }
-
     console.log(`\n${'='.repeat(70)}`);
-    console.log(`📨 START-SYNC: Determining sync mode for user ${userId}`);
-    console.log(`   Username: ${username}`);
+    console.log(`📨 START-SYNC: Initiating authenticated deep sync for user ${userId}`);
     console.log(`${'='.repeat(70)}\n`);
 
     try {
-        // ── DETERMINE SYNC MODE ────────────────────────────────────────────────
-        // Read the user's last sync watermark from the database.
-        // - null  → never synced before → FULL sync
-        // - Date  → previously synced   → INCREMENTAL sync (delta only)
-        const user = await User.findById(userId).select('lastLeetcodeSyncAt lastSolvedCount');
+        // ── VERIFY STORED SESSION ──────────────────────────────────────────────
+        // The sync button now requires an encrypted LEETCODE_SESSION.
+        // Users must store their session via Settings first.
+        const user = await User.findById(userId).select(
+            'leetcodeUsername encryptedLeetCodeSession lastLeetcodeSyncAt lastSolvedCount'
+        );
 
         if (!user) {
             return next(new AppError('User not found', 404));
         }
 
+        if (!user.encryptedLeetCodeSession) {
+            return next(new AppError(
+                'No LeetCode session stored. Please go to Settings to save your LEETCODE_SESSION cookie before syncing.',
+                400
+            ));
+        }
+
+        if (!user.leetcodeUsername) {
+            return next(new AppError(
+                'LeetCode username not found. Please store your session again in Settings.',
+                400
+            ));
+        }
+
+        const username = user.leetcodeUsername.toLowerCase();
+
+        console.log(`✅ Verified stored session for user: ${username}`);
+
+        // ── DETERMINE SYNC MODE ────────────────────────────────────────────────
         const lastSolvedCount = user.lastSolvedCount ?? 0;
         const sinceTimestamp = user.lastLeetcodeSyncAt || null;
         const syncMode = lastSolvedCount > 0 ? 'incremental' : 'full';
 
-        console.log(`✅ Sync mode determined: ${syncMode.toUpperCase()}`);
-        console.log(`   Previous Solved Count: ${lastSolvedCount}`);
-        if (lastSolvedCount === 0) {
-            console.log(`   No prior sync found — performing full sync`);
-        }
+        console.log(`✅ Sync mode: ${syncMode.toUpperCase()} (previous solved count: ${lastSolvedCount})`);
         // ─────────────────────────────────────────────────────────────────────
 
         // Create SyncJob in pending state
         const syncJob = await SyncJob.create({
             userId,
-            username: username.toLowerCase(),
+            username,
             status: 'pending',
             syncMode,
             syncFrom: sinceTimestamp
@@ -500,19 +500,19 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
 
         console.log(`✅ SyncJob created: ${syncJob._id}`);
 
-        // Enqueue the sync job to BullMQ — the worker will execute it
-        // This returns immediately. No need to await the sync itself.
+        // Enqueue the deep sync job to BullMQ — the worker will execute it
+        // The worker loads the encrypted session from the User document
         await syncQueue.add('sync', {
             syncJobId: syncJob._id.toString(),
             username,
             userId,
             lastSolvedCount,
             syncMode,
-            syncType: 'delta',
+            syncType: 'deep',  // Uses authenticated session with pagination
         });
 
-        console.log(`🚀 Sync job enqueued to BullMQ (not executed yet)`);
-        console.log(`   Queue: sync, Job type: delta`);
+        console.log(`🚀 Deep sync job enqueued to BullMQ (not executed yet)`);
+        console.log(`   Queue: sync, Job type: deep`);
         console.log(`✅ Returning syncJobId to client immediately\n`);
 
         // Return immediately with sync job ID
@@ -521,7 +521,7 @@ const startBackgroundSync = asyncHandler(async (req, res, next) => {
             message: `${syncMode === 'incremental' ? 'Incremental' : 'Full'} sync started in background`,
             data: {
                 syncJobId: syncJob._id,
-                username: username,
+                username,
                 status: syncJob.status,
                 syncMode,
                 previousSolvedCount: lastSolvedCount,

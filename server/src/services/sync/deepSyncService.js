@@ -2,6 +2,7 @@ import leetcodeAuthProvider from '../providers/leetcodeAuthProvider.js';
 import problemMetadataService from '../enrichment/problemMetadataService.js';
 import Problem from '../../models/Problem.js';
 import SyncJob from '../../models/SyncJob.js';
+import User from '../../models/User.js';
 import { getIO } from '../../socketManager.js';
 
 /**
@@ -634,6 +635,26 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
 
         await syncJob.save();
 
+        // ── STAMP WATERMARK ON USER DOCUMENT ─────────────────────────────────
+        // Update the user's last sync watermark so that:
+        //   1. getSyncInfo() returns the correct sync metadata for the UI
+        //   2. Subsequent syncs show "incremental" mode
+        //   3. lastSolvedCount serves as the baseline for future delta detection
+        //
+        // Use totalExpected (from the LeetCode profile) if available;
+        // otherwise fall back to the count of unique problems processed.
+        const solvedCount = syncJob.progress.totalExpected > 0
+            ? syncJob.progress.totalExpected
+            : totalInserted + totalDuplicates;
+
+        await User.findByIdAndUpdate(userId, {
+            lastLeetcodeSyncAt: new Date(),
+            lastSolvedCount: solvedCount,
+        });
+
+        console.log(`✅ User watermark updated: lastSolvedCount = ${solvedCount}`);
+        // ─────────────────────────────────────────────────────────────────────
+
         // Emit completion event
         getIO()?.to(userId.toString()).emit('sync-complete', {
             status: 'completed',
@@ -652,6 +673,7 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
         console.log(`   Total Inserted: ${totalInserted}`);
         console.log(`   Total Duplicates: ${totalDuplicates}`);
         console.log(`   Total Failed: ${totalFailed}`);
+        console.log(`   Solved Count: ${solvedCount}`);
         console.log(`   Metadata Cached: ${metadataStats.cached}`);
         console.log(`   Metadata Fetched: ${metadataStats.fetched}`);
         console.log(`   Metadata Failed: ${metadataStats.failed}`);
@@ -666,6 +688,7 @@ async function performDeepSync(userId, encryptedSession, syncJobId) {
                 duplicates: totalDuplicates,
                 failed: totalFailed,
                 processed: syncJob.progress.processed,
+                solvedCount,
                 metadataStats,
             },
         };
